@@ -197,7 +197,7 @@ def stage_noise():
     # reported for the parity discussion, NOT yet applied.
     p, s = 0.8, FINAL_SCALE / 0.05  # pixfrac, scale ratio vs native 0.05 grid
     # native ACS pixel is 0.05" so s=1 here; formula kept for generality
-    r = (p / s) * (1 - s / (3 * p)) if s < p else 1 - p / (3 * s)
+    r = (s / p) * (1 - s / (3 * p)) if s < p else 1 - p / (3 * s)
     R = 1.0 / r
     print(f"[noise] correlated-noise factor R = {R:.3f} (pixfrac={p}, s={s})")
     print(f"[noise] masked pixels (wht<=0): {bad.sum()}")

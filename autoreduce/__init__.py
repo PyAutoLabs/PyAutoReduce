@@ -16,3 +16,6 @@ try:
     __version__ = _version("autoreduce")
 except PackageNotFoundError:
     __version__ = "0.0.dev0"
+
+from .target import TargetSpec
+from .pipeline import reduce_target

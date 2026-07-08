@@ -235,9 +235,16 @@ compared against the legacy modeling dataset:
 | noise ratio × R (R = 1.364) | **0.924** ≈ data ratio | **legacy noise maps are consistent with the correlated-noise correction being applied** — after applying R, data and noise carry the same ~7% global scale offset, i.e. the noise *recipe* matches |
 
 Conclusions adopted into the design: `final_units='cps'` stands; stage 4
-**applies** the Casertano/DrizzlePac factor R as designed; the residual ~7%
-scale offset is a phase-1 acceptance-test item (reduce with the exact legacy
-exposure set + proper WCS registration before judging photometric parity).
+**applies** the Casertano/DrizzlePac factor R as designed. The production
+pipeline (proposal-filtered exposures, sub-pixel registration) lands at data
+ratio 0.941 / noise ratio 0.925 — the ~6% global flux scale vs the legacy
+dataset is **accepted as a documented difference** (decision 2026-07-08):
+the legacy reduction's exact provenance (kernel, photometric era,
+FLT-vs-FLC calibration) is unrecoverable, both ratios carry the same scale so
+the *relative* products are self-consistent, and lens-model inferences are
+scale-invariant in the relevant regime. A PyAutoMind research prompt tracks
+chasing it (gaussian-kernel re-drizzle + calibration-era check) if it ever
+matters.
 Also confirmed: tier-1 ePSF is plausible for this field (236 point-like
 >10σ detections mosaic-wide, pre-selection), and CRDS reference-file sync +
 HAP-skycell query filtering belong to the acquire stage (see above).

@@ -205,6 +205,28 @@ and one awkward system):
 4. Discrepancies are documented in this file's parity appendix (to be added),
    never silently absorbed.
 
+## Parity appendix — spike results (slacs0008-0004, 2026-07-08)
+
+First end-to-end run (`prototypes/slacs_f814w_spike.py`): 7 FLC exposures
+(program 10886, EXPTIME 3132s total) → CRDS sync → AstroDrizzle (0.05″/pix,
+north-up, IVM, pixfrac 0.8, square kernel, cps) → noise map → 281×281 cutout,
+compared against the legacy modeling dataset:
+
+| Quantity | Result | Reading |
+|----------|--------|---------|
+| registration | integer offset (0, 2) px | legacy cutout centre differs by 0.1″; integer roll only — sub-pixel registration needed for tighter photometry |
+| data ratio (bright px, n=1223) | median **0.934** | **units confirmed e-/s** (a legacy-in-electrons mismatch would read ~3132); ~7% global flux deficit to chase (exposure-set and sky-subtraction differences are the suspects — the spike stacked neighbouring-pointing exposures the legacy reduction almost certainly excluded) |
+| noise ratio (R *not* applied) | median **0.678** [0.597, 0.714] | our uncorrected noise is ~32% below legacy |
+| noise ratio × R (R = 1.364) | **0.924** ≈ data ratio | **legacy noise maps are consistent with the correlated-noise correction being applied** — after applying R, data and noise carry the same ~7% global scale offset, i.e. the noise *recipe* matches |
+
+Conclusions adopted into the design: `final_units='cps'` stands; stage 4
+**applies** the Casertano/DrizzlePac factor R as designed; the residual ~7%
+scale offset is a phase-1 acceptance-test item (reduce with the exact legacy
+exposure set + proper WCS registration before judging photometric parity).
+Also confirmed: tier-1 ePSF is plausible for this field (236 point-like
+>10σ detections mosaic-wide, pre-selection), and CRDS reference-file sync +
+HAP-skycell query filtering belong to the acquire stage (see above).
+
 ## Non-goals (phase 1)
 
 WFC3, other filters, JWST, per-exposure `_flt` products, and Euclid (owned by

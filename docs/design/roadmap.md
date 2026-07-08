@@ -13,17 +13,14 @@ geometry, calibrated-product naming (`_flc` vs `_flt` vs `_cal`), units and
 gain, recommended combine parameters, and the PSF-model source. ACS/WFC is
 adapter #1; nothing outside `instruments/` may mention a detector by name.
 
-## HST/WFC3 (IR + UVIS)
+## HST/WFC3 (IR + UVIS) — **in progress (phase 2, PyAutoReduce#4)**
 
-- Same stage graph; new adapter. UVIS is ACS-like (CTE-corrected `_flc`,
-  drizzle); IR differs (no CTE correction, up-the-ramp sampling, different
-  DQ semantics, 0.13″ native pixels → different `final_scale` choice).
-- The [ajshajib/hst-lens](https://github.com/ajshajib/hst-lens) notebooks
-  (download / IR / UVIS) serve as a step checklist to audit against — not as
-  architecture. Their gaps (no ACS, notebook-form, unclear noise treatment)
-  are what this project exists to fix.
-- Other ACS filters (F435W, F606W…) are config, not code: the adapter already
-  parameterizes filter-dependent zero-points and PSF models.
+- Design deltas live in [`wfc3.md`](wfc3.md); adapters `wfc3_uvis` /
+  `wfc3_ir` implemented. UVIS is ACS-like (CTE-corrected `_flc`); IR differs
+  (`_flt`, no CTE correction, up-the-ramp CR rejection, 0.128″ native →
+  recommended 0.065″ output).
+- Other ACS/WFC3 filters (F435W, F606W…) are config, not code: the adapter
+  already parameterizes the filter-dependent pieces.
 
 ## JWST (NIRCam first)
 

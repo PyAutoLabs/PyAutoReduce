@@ -64,6 +64,14 @@ def build_epsf(
         size += 1
     stars = extract_stars(NDData(sci), positions, size=size)
 
+    # extract_stars drops stars whose window overruns the mosaic edge, so the
+    # minimum-star contract must be re-checked on what actually survived.
+    if len(stars) < MIN_STARS:
+        raise InsufficientStarsError(
+            f"{len(stars)} stars survived cutout extraction (< {MIN_STARS}); "
+            f"tier 1 ePSF is not viable — select tier 2 (model PSF) explicitly"
+        )
+
     builder = EPSFBuilder(oversampling=oversampling, maxiters=10, progress_bar=False)
     epsf_model, fitted = builder(stars)
 

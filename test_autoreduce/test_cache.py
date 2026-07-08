@@ -34,6 +34,13 @@ class TestManifest:
         cache = ExposureCache(tmp_path)
         assert cache.exposures_for("nope") == []
 
+    def test_incompatible_manifest_schema_fails_loudly(self, tmp_path):
+        cache = ExposureCache(tmp_path)
+        # A spike-era manifest: same filename, different schema.
+        cache.manifest_path.write_text(json.dumps({"target": {}, "flc_files": []}))
+        with pytest.raises(ValueError, match="not an ExposureCache manifest"):
+            cache.exposures_for("lens1")
+
 
 class TestEviction:
     def test_evict_removes_files_keeps_provenance(self, tmp_path):

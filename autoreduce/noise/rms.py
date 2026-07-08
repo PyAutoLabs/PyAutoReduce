@@ -79,11 +79,7 @@ def assert_finite_within(noise_map: np.ndarray, region_name: str) -> None:
 
 def empirical_background_rms(sci: np.ndarray, n_sigma: float = 3.0) -> float:
     """Sigma-clipped RMS of the mosaic — the blank-sky validation check."""
-    data = sci[np.isfinite(sci)]
-    for _ in range(10):
-        mean, std = data.mean(), data.std()
-        keep = np.abs(data - mean) < n_sigma * std
-        if keep.all():
-            break
-        data = data[keep]
-    return float(data.std())
+    from astropy.stats import sigma_clipped_stats
+
+    _, _, std = sigma_clipped_stats(sci[np.isfinite(sci)], sigma=n_sigma)
+    return float(std)

@@ -47,6 +47,7 @@ def reduce_target(
     # -- acquire ------------------------------------------------------------
     crds_mod.configure_environment(cache.references_dir, adapter)
     exposures = cache.exposures_for(spec.name)
+    downloaded = False
     if not exposures:
         observations = mast_mod.query_exposures(
             spec.ra,
@@ -61,10 +62,17 @@ def reduce_target(
         cache.record_download(
             spec.name, [str(p) for p in exposures], source="mast"
         )
-    crds_mod.sync_best_references(exposures)
+        downloaded = True
+    # Fully-cached re-runs with references already synced stay offline.
+    refs_synced = False
+    if downloaded or not crds_mod.references_present(cache.references_dir, adapter):
+        crds_mod.sync_best_references(exposures)
+        refs_synced = True
     record["acquire"] = {
         "n_exposures": len(exposures),
         "exposures": [Path(p).name for p in exposures],
+        "downloaded": downloaded,
+        "references_synced": refs_synced,
     }
 
     # -- align ----------------------------------------------------------------
@@ -81,8 +89,9 @@ def reduce_target(
 
     from astropy.io import fits
 
-    sci_hdu = fits.open(sci_path)[0]
-    sci, header = sci_hdu.data, sci_hdu.header
+    with fits.open(sci_path) as hdul:
+        sci = hdul[0].data.astype(float)
+        header = hdul[0].header.copy()
     wht = fits.getdata(wht_path)
     exptime = header.get("EXPTIME", header.get("TEXPTIME"))
     if exptime is None or exptime <= 0:
@@ -139,7 +148,7 @@ def reduce_target(
         "products": ["data.fits", "noise_map.fits", "psf.fits", "psf_full.fits"],
         "cutout_shape": list(spec.cutout_shape),
         "pixel_scale": spec.final_scale,
-        "data_units": "electrons/s",
+        "data_units": drizzle_prov["drizzle_kwargs"]["final_units"],
     }
 
     provenance_mod.write_reduction_json(out_dir, record)

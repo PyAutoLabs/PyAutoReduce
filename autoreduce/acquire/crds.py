@@ -22,18 +22,27 @@ def configure_environment(references_root: Path, adapter: InstrumentAdapter) -> 
     """
     Set the CRDS variables for this process. Must run before drizzlepac is
     imported anywhere in the process. Returns the mapping applied.
+
+    Deliberately overrides any inherited CRDS_PATH/jref: the pipeline is a
+    pure function of the target spec plus the archive, so its reference files
+    live in *its* cache, not wherever the shell environment happens to point.
     """
     env = {
         "CRDS_SERVER_URL": CRDS_SERVER_URL,
         "CRDS_PATH": str(references_root),
         adapter.reference_env_key: str(
-            Path(references_root) / "references" / "hst" / adapter.key.split("_")[0]
+            Path(references_root) / adapter.crds_reference_subpath
         )
         + "/",
     }
-    for key, value in env.items():
-        os.environ.setdefault(key, value)
+    os.environ.update(env)
     return env
+
+
+def references_present(references_root: Path, adapter: InstrumentAdapter) -> bool:
+    """True if the instrument's reference directory exists and is non-empty."""
+    ref_dir = Path(references_root) / adapter.crds_reference_subpath
+    return ref_dir.is_dir() and any(ref_dir.iterdir())
 
 
 def sync_best_references(exposures: List[Path]) -> None:

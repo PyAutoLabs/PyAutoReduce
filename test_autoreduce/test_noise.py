@@ -26,7 +26,8 @@ class TestCasertanoR:
         assert casertano_r(0.6, 1.0) < casertano_r(0.8, 1.0) < casertano_r(1.0, 1.0)
 
     def test_branch_s_less_than_p(self):
-        # Finer output grid than drop size uses the (p/s) branch.
+        # Finer output grid than the drop uses the (s/p) branch: more
+        # correlation than shift-and-add, R -> inf as s -> 0.
         r_fine = casertano_r(1.0, 0.5)
         assert r_fine > casertano_r(1.0, 1.0)
 

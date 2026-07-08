@@ -14,6 +14,7 @@ ACS_WFC = register(
         native_scale=0.05,
         calibrated_suffix="FLC",
         reference_env_key="jref",
+        crds_reference_subpath="references/hst/acs",
         supports_cte_correction=True,
         default_drizzle_kwargs={
             "skymethod": "globalmin+match",

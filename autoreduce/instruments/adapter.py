@@ -17,6 +17,7 @@ class InstrumentAdapter:
     native_scale: float  # arcsec / pix
     calibrated_suffix: str  # exposure product to reduce, e.g. "FLC"
     reference_env_key: str  # CRDS reference-path variable, e.g. "jref"
+    crds_reference_subpath: str  # where CRDS syncs this instrument's files
     supports_cte_correction: bool
     default_drizzle_kwargs: Dict[str, object]
     saturation_dn: float  # conservative full-well / saturation level

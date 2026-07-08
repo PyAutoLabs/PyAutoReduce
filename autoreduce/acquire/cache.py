@@ -37,7 +37,15 @@ class ExposureCache:
 
     def read_manifest(self) -> Dict:
         if self.manifest_path.exists():
-            return json.loads(self.manifest_path.read_text())
+            manifest = json.loads(self.manifest_path.read_text())
+            if "targets" not in manifest:
+                raise ValueError(
+                    f"{self.manifest_path} is not an ExposureCache manifest "
+                    f"(keys: {sorted(manifest)}); refusing to guess — point the "
+                    f"cache at a fresh directory (spike-era caches are not "
+                    f"compatible)"
+                )
+            return manifest
         return {"targets": {}}
 
     def _write_manifest(self, manifest: Dict) -> None:

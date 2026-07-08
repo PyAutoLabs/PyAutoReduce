@@ -103,12 +103,27 @@ median-combine baseline), final drizzle of all exposures onto one grid.
 | `final_scale` | 0.05″/pix | SLACS convention; matches every existing modeling dataset and the source-plane resolution regime lens models are calibrated in |
 | `final_rot` | 0 (north-up) | uniform orientation across samples simplifies masks, position angles, and cross-dataset comparison |
 | `final_wht_type` | `IVM` | inverse-variance weights are what stage 4's noise map needs |
-| `final_pixfrac` | start 0.8 | 4-exposure snapshots under-sample a 0.05″ grid with small pixfrac; exact value fixed by the SLACS parity study (below) |
-| `final_kernel` | start `square`; evaluate `gaussian` | SLACS V used a Gaussian kernel; parity study decides whether matching it matters for the noise/PSF products |
+| `final_pixfrac` | **user-facing dial**, default 0.8 | the literature genuinely disagrees — SLACS V used no drizzle at all (bilinear rectification, see below), SLACS IX MultiDrizzled with an unstated pixfrac, Bayer et al. used pixfrac 1.0, SLACS's WFPC2 additions 0.6 — so pixfrac (with `final_kernel`) is first-class configuration, not a buried default. Smaller pixfrac *reduces* correlated noise (R at s=1: 1.50 @ p=1.0, 1.364 @ p=0.8, 1.25 @ p=0.6) at the cost of coverage uniformity; the pipeline reports the STScI weight-uniformity diagnostic (WHT RMS/median over the cutout, ≲0.2 required; spike measured 0.066 at p=0.8 for 7 exposures) and the resulting R with every reduction, so the choice is auditable per dataset |
+| `final_kernel` | user-facing with `final_pixfrac`, default `square` | SLACS IX used `gaussian`; parity study decides whether matching it matters for the noise/PSF products |
 | `final_units` | `cps` (e-/s) | counts/s + `EXPTIME` in provenance keeps the Poisson term computable while matching how the existing datasets are modeled — confirmed against SLACS parity |
 
 Undrizzled artifacts (`_single_sci`, masks) stay in the transient cache; only
 the mosaic + weight map proceed.
+
+**The SLACS-V caveat (literature finding):** [Bolton et al.
+2008](https://arxiv.org/abs/0805.1931) did **not** drizzle the F814W snapshot
+data — "the 'drizzle' re-sampling algorithm … is not well suited to
+single-exposure Snapshot data". Their ACSPROC recipe rectifies frames onto the
+0.05″ grid by **bilinear interpolation**, masks cosmic rays with **L.A.
+Cosmic** (van Dokkum 2001), stacks dithered sets with a further CR-rejection
+step, and rectifies a **Tiny Tim** PSF with identical sampling (a clean
+precedent for our drizzled-PSF invariant). Consequences: (1) the
+single-exposure path needs a non-drizzle branch (rectify + L.A. Cosmic, or
+single-image drizzle with `driz_cr` off — decide in phase 1); (2) legacy
+parity interpretation depends on which recipe produced a given legacy dataset
+(multi-exposure targets like slacs0008-0004 are SLACS-IX-style MultiDrizzle;
+true one-exposure snapshots are ACSPROC bilinear, where the noise correlation
+structure differs from any drizzle R).
 
 **Open question for the parity study:** whether the existing SLACS
 `data.fits` are in e-/s or e-; the study measures this from the data/noise

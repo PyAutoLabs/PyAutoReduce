@@ -53,6 +53,7 @@ def combine(
         Image3Pipeline.call(
             str(asn_path),
             output_dir=str(output_dir),
+            save_results=True,  # stpipe .call() discards results otherwise
             steps={
                 "resample": {
                     "pixel_scale": spec.final_scale,

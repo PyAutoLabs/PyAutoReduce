@@ -44,6 +44,19 @@ provenance (`reduction.json`), an explicit noise-map recipe with correlated-
 noise handling, tiered PSF construction with diagnostics, cache/eviction, and
 loud-failure contracts. Nothing in their steps is absent from our stage graph.
 
+## Integration finding — IR pixfrac/coverage (2026-07-08)
+
+Reducing the J0252+0039 F160W snapshot (program 11202) at the recommended
+0.065″/pix with the phase-1 default pixfrac 0.8 left **230 zero-weight
+speckle pixels inside the cutout** — the few-dither + fine-grid (s ≈ 0.51 <
+p) regime — and the finite-noise packaging guard refused to ship the dataset,
+exactly as designed. pixfrac 1.0 closes coverage at the cost of a larger
+correlated-noise factor (reported per run, as always). Rule of thumb recorded
+here: **on the IR channel, few-dither data at sub-native output scales needs
+pixfrac → 1.0 (or a coarser scale dial)**; the WHT-uniformity diagnostic and
+the finite-noise guard enforce the trade-off loudly rather than letting a
+holey dataset through.
+
 ## Open items
 
 - IR integration target: discovered via MAST at run time; if no suitable

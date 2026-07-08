@@ -54,6 +54,16 @@ def spec_for(channel: str) -> TargetSpec:
             instrument="wfc3_ir",
             filter_name=filter_name,
             final_scale=instruments.get("wfc3_ir").recommended_final_scale,
+            # Few-dither snapshot on a half-native grid: pixfrac 0.8 leaves
+            # zero-weight speckle (the finite-noise guard caught it); the
+            # full drop closes coverage at the cost of a larger R — the
+            # dial trade-off working as documented.
+            final_pixfrac=1.0,
+            # 281 px at 0.065" spans 18.3" — far more sky than the ACS-era
+            # 14" footprint, and it clips a zero-coverage detector-defect
+            # blob 8.5" from the lens (the guard refused it). Match the ACS
+            # sky footprint instead: 14" / 0.065 -> 215 px.
+            cutout_shape=(215, 215),
         )
     raise ValueError(channel)
 

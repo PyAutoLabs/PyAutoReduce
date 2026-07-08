@@ -8,7 +8,7 @@ from the lens itself.
 """
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 
@@ -59,13 +59,20 @@ def find_stars(
     sci: np.ndarray,
     selection: StarSelection,
     target_xy: Tuple[float, float],
-    peak_max: float,
+    peak_max: Optional[float],
 ):
-    """DAOStarFinder detections filtered through every selection cut."""
+    """DAOStarFinder detections filtered through every selection cut.
+
+    ``peak_max=None`` disables the saturation cut (surface-brightness-unit
+    mosaics where a full-well cap is meaningless; saturated cores arrive
+    blanked from the upstream pipeline).
+    """
     from astropy.stats import sigma_clipped_stats
     from photutils.detection import DAOStarFinder
 
-    _, median, std = sigma_clipped_stats(sci, sigma=3.0)
+    # Mosaics carry NaN outside the coverage footprint (JWST especially).
+    finite = np.isfinite(sci)
+    _, median, std = sigma_clipped_stats(sci[finite], sigma=3.0)
     finder = DAOStarFinder(
         fwhm=selection.fwhm_pix,
         threshold=selection.detection_sigma * std,
@@ -75,7 +82,7 @@ def find_stars(
         roundhi=selection.round_limit,
         peakmax=peak_max,
     )
-    sources = finder(sci - median)
+    sources = finder(np.nan_to_num(sci - median), mask=~finite)
     if sources is None or len(sources) == 0:
         return None
 

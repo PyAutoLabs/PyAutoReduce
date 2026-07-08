@@ -64,8 +64,13 @@ def reduce_target(
         )
         downloaded = True
     # Fully-cached re-runs with references already synced stay offline.
+    # The jwst pipeline syncs its own references lazily through CRDS_PATH,
+    # so explicit bestrefs is an HST-observatory step.
     refs_synced = False
-    if downloaded or not crds_mod.references_present(cache.references_dir, adapter):
+    if adapter.observatory == "hst" and (
+        downloaded
+        or not crds_mod.references_present(cache.references_dir, adapter)
+    ):
         crds_mod.sync_best_references(exposures)
         refs_synced = True
     record["acquire"] = {
@@ -98,41 +103,68 @@ def reduce_target(
         raise ValueError(f"mosaic header carries no positive EXPTIME: {exptime}")
 
     # -- noise -----------------------------------------------------------------
-    noise = rms_mod.noise_map_from(
-        sci,
-        wht,
-        exptime=float(exptime),
-        correlated_noise_factor=drizzle_prov["correlated_noise_factor"],
-    )
-    record["noise"] = {
-        "recipe": "R * sqrt(max(sci,0)/exptime + 1/wht)",
-        "correlated_noise_factor": drizzle_prov["correlated_noise_factor"],
-        "exptime": float(exptime),
-        "empirical_background_rms": rms_mod.empirical_background_rms(
-            sci[np.isfinite(noise)]
-        ),
-    }
+    if adapter.combine_backend == "jwst_image3":
+        from .noise import jwst_rms as jwst_rms_mod
+
+        err = fits.getdata(drizzle_prov["err_path"]).astype(float)
+        noise, consistency = jwst_rms_mod.noise_map_from_error(
+            err,
+            sci,
+            correlated_noise_factor=drizzle_prov["correlated_noise_factor"],
+        )
+        record["noise"] = {
+            "recipe": "R * ERR (propagated by calwebb_image3 resample)",
+            "correlated_noise_factor": drizzle_prov["correlated_noise_factor"],
+            "exptime": float(exptime),
+            **consistency,
+        }
+    else:
+        noise = rms_mod.noise_map_from(
+            sci,
+            wht,
+            exptime=float(exptime),
+            correlated_noise_factor=drizzle_prov["correlated_noise_factor"],
+        )
+        record["noise"] = {
+            "recipe": "R * sqrt(max(sci,0)/exptime + 1/wht)",
+            "correlated_noise_factor": drizzle_prov["correlated_noise_factor"],
+            "exptime": float(exptime),
+            "empirical_background_rms": rms_mod.empirical_background_rms(
+                sci[np.isfinite(noise)]
+            ),
+        }
 
     # -- psf -------------------------------------------------------------------
     from astropy.wcs import WCS
 
     target_xy = WCS(header).world_to_pixel_values(spec.ra, spec.dec)
     selection = stars_mod.StarSelection()
-    # Saturation is per exposure, not per stack: a star saturates when its
-    # rate fills the well within one exposure, so the cps cap divides the
-    # full well by the longest single-exposure time — never the mosaic total.
-    max_single_exptime = max(
-        float(fits.getheader(p).get("EXPTIME", 0.0)) for p in exposures
-    )
-    if max_single_exptime <= 0.0:
-        raise ValueError("no exposure carries a positive EXPTIME header")
+    if adapter.observatory == "hst":
+        # Saturation is per exposure, not per stack: a star saturates when its
+        # rate fills the well within one exposure, so the cps cap divides the
+        # full well by the longest single-exposure time — never the mosaic
+        # total.
+        max_single_exptime = max(
+            float(fits.getheader(p).get("EXPTIME", 0.0)) for p in exposures
+        )
+        if max_single_exptime <= 0.0:
+            raise ValueError("no exposure carries a positive EXPTIME header")
+        peak_max = (
+            selection.saturation_fraction
+            * adapter.saturation_dn
+            / max_single_exptime
+        )
+    else:
+        # JWST mosaics are in surface-brightness units (MJy/sr) where a
+        # full-well cut is meaningless; saturated cores arrive as NaN/DQ-blank
+        # from the level-2 pipeline, so no peak cut is applied. Refinement
+        # (unit-converted cap) tracked in docs/design/jwst.md open items.
+        peak_max = None
     stars = stars_mod.find_stars(
         sci,
         selection,
         target_xy=(float(target_xy[0]), float(target_xy[1])),
-        peak_max=selection.saturation_fraction
-        * adapter.saturation_dn
-        / max_single_exptime,
+        peak_max=peak_max,
     )
     psf, psf_full, psf_diag = epsf_mod.build_epsf(
         sci, stars, spec.psf_shape, spec.psf_full_shape

@@ -48,10 +48,21 @@ def combine(
     output_dir: Path,
 ) -> Tuple[Path, Path, Dict]:
     """
-    Run AstroDrizzle; return (sci_path, wht_path, provenance_fragment).
+    Combine exposures via the adapter's backend; return
+    (sci_path, wht_path, provenance_fragment).
 
     Requires the CRDS environment configured (acquire.crds) beforehand.
     """
+    if adapter.combine_backend == "jwst_image3":
+        from . import jwst_combine
+
+        return jwst_combine.combine(exposures, spec, adapter, output_dir)
+    if adapter.combine_backend != "astrodrizzle":
+        raise ValueError(
+            f"unknown combine backend {adapter.combine_backend!r} "
+            f"for instrument {adapter.key}"
+        )
+
     from astropy.io import fits
     from drizzlepac import astrodrizzle
 

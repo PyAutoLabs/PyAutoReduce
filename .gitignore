@@ -13,6 +13,8 @@ venv/
 *.fits.gz
 prototypes/output/
 prototypes/cache/
+scripts/output/
+scripts/cache/
 mastDownload/
 
 # Notebooks

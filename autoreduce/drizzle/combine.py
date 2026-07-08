@@ -60,11 +60,19 @@ def combine(
     output_root = str(output_dir / f"{spec.name}_{spec.filter_name.lower()}")
 
     kwargs = drizzle_kwargs_for(spec, adapter, len(exposures))
-    astrodrizzle.AstroDrizzle(
-        input=[str(p) for p in exposures],
-        output=output_root,
-        **kwargs,
-    )
+    # AstroDrizzle scatters scratch files into the cwd; keep them in work dir.
+    import os
+
+    cwd = os.getcwd()
+    os.chdir(output_dir)
+    try:
+        astrodrizzle.AstroDrizzle(
+            input=[str(p) for p in exposures],
+            output=output_root,
+            **kwargs,
+        )
+    finally:
+        os.chdir(cwd)
 
     def _one(suffix: str) -> Path:
         hits = sorted(glob.glob(f"{output_root}*{suffix}"))

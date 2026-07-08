@@ -57,10 +57,14 @@ def combine(
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_root = str(output_dir / f"{spec.name}_{spec.filter_name.lower()}")
+    # Drizzlepac lowercases output filenames internally, which breaks absolute
+    # paths containing capitals on case-sensitive filesystems — so chdir into
+    # the work dir and pass a relative, already-lowercase output root. This
+    # also keeps AstroDrizzle's cwd scratch files contained.
+    output_name = f"{spec.name}_{spec.filter_name}".lower()
+    output_root = str(output_dir / output_name)
 
     kwargs = drizzle_kwargs_for(spec, adapter, len(exposures))
-    # AstroDrizzle scatters scratch files into the cwd; keep them in work dir.
     import os
 
     cwd = os.getcwd()
@@ -68,7 +72,7 @@ def combine(
     try:
         astrodrizzle.AstroDrizzle(
             input=[str(p) for p in exposures],
-            output=output_root,
+            output=output_name,
             **kwargs,
         )
     finally:

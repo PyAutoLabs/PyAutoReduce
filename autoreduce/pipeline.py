@@ -118,11 +118,21 @@ def reduce_target(
 
     target_xy = WCS(header).world_to_pixel_values(spec.ra, spec.dec)
     selection = stars_mod.StarSelection()
+    # Saturation is per exposure, not per stack: a star saturates when its
+    # rate fills the well within one exposure, so the cps cap divides the
+    # full well by the longest single-exposure time — never the mosaic total.
+    max_single_exptime = max(
+        float(fits.getheader(p).get("EXPTIME", 0.0)) for p in exposures
+    )
+    if max_single_exptime <= 0.0:
+        raise ValueError("no exposure carries a positive EXPTIME header")
     stars = stars_mod.find_stars(
         sci,
         selection,
         target_xy=(float(target_xy[0]), float(target_xy[1])),
-        peak_max=selection.saturation_fraction * adapter.saturation_dn / float(exptime),
+        peak_max=selection.saturation_fraction
+        * adapter.saturation_dn
+        / max_single_exptime,
     )
     psf, psf_full, psf_diag = epsf_mod.build_epsf(
         sci, stars, spec.psf_shape, spec.psf_full_shape

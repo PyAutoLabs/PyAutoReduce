@@ -88,7 +88,12 @@ def discover_ir_filter() -> str:
             "[ir] no direct WFC3/IR observations at J0252+0039 — the IR leg "
             "needs a different target (parked question on issue #4)"
         )
-    filters = sorted({str(row["filters"]) for row in direct})
+    # HAP composite rows carry the pseudo-filter 'detection'; never reduce it.
+    filters = sorted(
+        {str(row["filters"]) for row in direct} - {"detection"}
+    )
+    if not filters:
+        sys.exit("[ir] only HAP composite products found — no real filter")
     print(f"[ir] direct WFC3/IR observations found; filters: {filters}")
     preferred = [f for f in filters if f == "F160W"] or filters
     return preferred[0]

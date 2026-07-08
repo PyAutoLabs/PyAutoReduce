@@ -18,7 +18,7 @@ mentions a detector.
 (arXiv:1803.05952)](https://arxiv.org/abs/1803.05952) F390W reduction of
 SDSS J0252+0039 — output 0.0396″/pix, **pixfrac 1.0**, noise recipe
 σ = √(N/W + σ²_sky) with σ_sky ≈ 0.002 e-/s. Our integration script
-(`scripts/reduce_j0252_uvis.py`) reduces the same data with those dials and
+(`scripts/reduce_j0252_wfc3.py --channel uvis`) reduces the same data with those dials and
 checks: output units e-/s, empirical σ_sky in that regime, noise-map
 consistency, WHT uniformity. (Note their correlated-noise treatment is
 blank-sky *realizations*, not the scalar R — with pixfrac 1.0 at native

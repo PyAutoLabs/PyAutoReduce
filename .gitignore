@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# Data — reductions produce large FITS files; none are ever committed.
+*.fits
+*.fits.gz
+prototypes/output/
+prototypes/cache/
+mastDownload/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store

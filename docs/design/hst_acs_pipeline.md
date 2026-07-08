@@ -62,6 +62,19 @@ exposures current with the best reference files.
 - Whole-sample runs stream: acquire → reduce → package → evict, one target at
   a time, so peak disk usage is one target's exposures regardless of sample
   size.
+- **Reference files are acquisition too** (spike finding): AstroDrizzle's IVM
+  weighting resolves ACS calibration files through ``jref$``, so the acquire
+  stage syncs CRDS best references for the downloaded exposures
+  (``crds.bestrefs --sync-references=1 --update-bestrefs``) into the cache and
+  exports ``CRDS_PATH``/``jref``. Reference files are shared across targets
+  and are the one cache component *not* evicted per target.
+
+**Query hygiene** (spike finding): a plain coordinate query also matches HAP
+skycell products, whose member lists re-reference the same exposures many
+times over (31 products deduping to 7 files for slacs0008-0004) and pull in
+neighbouring-pointing exposures. The acquire stage filters to direct
+calibration-level-2 observations and groups by proposal/visit before
+downloading; HAP products are used only on the explicit HAPCut path.
 
 ## Stage 2 — align
 

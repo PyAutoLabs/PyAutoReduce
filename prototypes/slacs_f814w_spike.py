@@ -18,9 +18,10 @@ prototypes/output/):
                 (data ratio, noise ratio) to answer the units and
                 correlated-noise questions empirically.
 
-Run inside the repo's spike venv:
+Run with the PyAuto environment (drizzlepac/astroquery/photutils are installed
+there, constrained to the PyAuto astropy/scipy/numpy pins):
 
-    .venv/bin/python prototypes/slacs_f814w_spike.py [--stage all]
+    ~/venv/PyAuto/bin/python prototypes/slacs_f814w_spike.py [--stage all]
 
 This is a prototype: it prints findings for the design doc's parity appendix;
 it is not pipeline code.
@@ -38,6 +39,14 @@ import numpy as np
 PROTO_DIR = Path(__file__).resolve().parent
 CACHE_DIR = PROTO_DIR / "cache"
 OUTPUT_DIR = PROTO_DIR / "output"
+
+# CRDS setup must precede any drizzlepac import: IVM weight generation resolves
+# ACS reference files (flats etc.) through the ``jref$`` environment variable.
+# Design finding: the acquire stage owns syncing these into the transient cache.
+CRDS_CACHE = CACHE_DIR / "crds"
+os.environ.setdefault("CRDS_SERVER_URL", "https://hst-crds.stsci.edu")
+os.environ.setdefault("CRDS_PATH", str(CRDS_CACHE))
+os.environ.setdefault("jref", str(CRDS_CACHE / "references" / "hst" / "acs") + "/")
 
 # SDSS J0008-0004 (slacs0008-0004): 00h08m02.96s -00d04m08.2s
 TARGET = {
@@ -95,6 +104,28 @@ def _flc_paths():
     if manifest.exists():
         return json.loads(manifest.read_text())["flc_files"]
     return sorted(str(p) for p in Path(CACHE_DIR).rglob("*_flc.fits"))
+
+
+def stage_refs():
+    """Sync the CRDS reference files the drizzle's IVM weighting needs."""
+    import subprocess
+
+    flc = _flc_paths()
+    if not flc:
+        sys.exit("[refs] no FLC files cached — run --stage acquire first")
+    CRDS_CACHE.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable, "-m", "crds.bestrefs",
+        "--files", *flc,
+        "--sync-references=1",
+        "--update-bestrefs",
+    ]
+    print(f"[refs] syncing CRDS reference files for {len(flc)} exposures")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    tail = "\n".join(result.stdout.splitlines()[-3:] + result.stderr.splitlines()[-3:])
+    print(f"[refs] bestrefs exit={result.returncode}\n{tail}")
+    if result.returncode != 0:
+        sys.exit("[refs] CRDS sync failed")
 
 
 def stage_drizzle():
@@ -264,6 +295,7 @@ def stage_compare():
 
 STAGES = {
     "acquire": stage_acquire,
+    "refs": stage_refs,
     "drizzle": stage_drizzle,
     "noise": stage_noise,
     "psf": stage_psf,

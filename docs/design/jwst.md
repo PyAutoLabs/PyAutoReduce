@@ -27,10 +27,42 @@ headers as usual. `scripts/reduce_cosmos_web_ring.py --band <F>` reduces each
 band from MAST `_cal` exposures and reports sub-pixel-registered data/noise
 ratios against the demo products (the SLACS-parity method).
 
+## PSF options — what the JWST weak-lensing and AGN literature says (2026-07-08)
+
+- **Weak lensing (COSMOS-Web's own practice):**
+  [ShOpt.jl](https://arxiv.org/abs/2401.11625) (Berman & McCleary 2024) is
+  COSMOS-Web's PSF characterization tool, benchmarked against **PSFEx** and
+  **PIFF** on real + simulated COSMOS-Web NIRCam imaging; all model the PSF
+  **empirically from field stars with low-order polynomial spatial variation
+  in (X, Y)** across the resampled mosaic. NIRCam PSFs vary with time,
+  bandpass and field position, so star-based per-mosaic models are the norm.
+- **AGN decomposition:** [Zhuang & Shen
+  2024](https://arxiv.org/abs/2304.13776) characterize NIRCam PSFs in 8
+  filters: spatial FWHM variation shrinks strongly with wavelength (max/RMS
+  ~20%/5% at F070W → **~3%/0.6% at F444W**); among SWarp / photutils / PSFEx
+  they find **PSFEx best**; PSF mismatch biases host fluxes high. COSMOS-Web
+  AGN work ([Zhuang et al. 2024](https://iopscience.iop.org/article/10.3847/1538-4357/ad1517))
+  and the galight PSF-library approach (Ding et al.; SHELLQs-JWST) use
+  curated star libraries / hybrid empirical PSFs; **pure STPSF (WebbPSF)
+  models are consistently disfavoured vs empirical** for decomposition work.
+
+**Adopted tiering for JWST (revision of the HST-era tier 2):**
+
+| Tier | Method | When |
+|------|--------|------|
+| 1 | single ePSF from mosaic stars (current photutils implementation) | **LW bands** (F277W/F444W): spatial variation ≲1% RMS — a single ePSF at the lens position is adequate for lens-galaxy work |
+| 2 | **spatially-varying empirical model evaluated at the lens position** — PSFEx-style polynomial (PSFEx or ShOpt back-end) | **SW bands** (F115W/F150W: ~5% RMS variation) and any weak-lensing-grade use; photutils ranks below PSFEx in the Zhuang & Shen benchmark, so this is the quality upgrade path |
+| 2b | STPSF model PSF | fallback only when the field lacks stars — flagged in provenance, never silent (the literature's consistent verdict: empirical beats model for decomposition) |
+| 3 | STARRED / PSFr iterative reconstruction | lensed quasars/AGN, unchanged from the HST design |
+
+Phase 3 ships tier 1; tiers 2/2b are the follow-up (PSFEx/ShOpt are external
+binaries/Julia — an integration decision for a dedicated prompt).
+
 ## Open items
 
-- STPSF tier-2 back-end (JWST PSF modeling standard); unit-aware saturation
-  cut for star selection in MJy/sr mosaics.
+- Tier-2 spatially-varying PSF back-end (PSFEx or ShOpt — see table above);
+  STPSF as explicit 2b fallback; unit-aware saturation cut for star
+  selection in MJy/sr mosaics.
 - jwst pinned at **1.14.0** by the PyAuto env constraints (astropy 6.1.2);
   provenance records the version — revisit when the env's astropy moves.
 - COSMOS-Web official reduction (Franco et al.) applies additional

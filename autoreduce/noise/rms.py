@@ -146,6 +146,19 @@ def mask_isolated_bad_pixels(
     return data_out, noise_out, diagnostics
 
 
+def mad_sigma(values: np.ndarray) -> float:
+    """
+    Robust sigma via the median absolute deviation (1.4826 x MAD), NaN-safe.
+    The one shared implementation — bad-pixel finding, object masking and
+    PSF vetting all threshold on this.
+    """
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return 0.0
+    centre = np.median(finite)
+    return float(1.4826 * np.median(np.abs(finite - centre)))
+
+
 def empirical_background_rms(sci: np.ndarray, n_sigma: float = 3.0) -> float:
     """Sigma-clipped RMS of the mosaic — the blank-sky validation check."""
     from astropy.stats import sigma_clipped_stats

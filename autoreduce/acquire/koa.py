@@ -75,7 +75,7 @@ def query_science_frames(
             f"contains(point('icrs', ra, dec), circle('icrs', {ra}, {dec}, 0.00833)) = 1",
             _camera_clause(adapter),
             f"lower(filter) like '%{filter_name.lower()}%'",
-            "koaimtyp = 'object'",
+            "lower(koaimtyp) = 'object'",
         ]
         if proposal_ids:
             progs = ", ".join(f"'{p.lower()}'" for p in proposal_ids)
@@ -99,7 +99,7 @@ def _query_flats_on(date_clause: str, adapter, filter_name: str, work_dir, tag: 
     adql = (
         f"select * from {_KOA_TABLE} where ({date_clause}) and "
         f"{_camera_clause(adapter)} and "
-        f"koaimtyp in ('flatlamp', 'flatlampoff', 'domeflat') "
+        f"lower(koaimtyp) in ('flatlamp', 'flatlampoff', 'domeflat') "
         f"and lower(filter) like '%{filter_name.lower()}%'"
     )
     return _query_tap(adql, work_dir / f"koa_flat_query_{tag}.xml")
@@ -133,7 +133,7 @@ def query_night_calibrations(
     )
     dark_adql = (
         f"select * from {_KOA_TABLE} where ({date_clause}) and "
-        f"{_camera_clause(adapter)} and koaimtyp = 'dark' and ({itime_clause})"
+        f"{_camera_clause(adapter)} and lower(koaimtyp) = 'dark' and ({itime_clause})"
     )
     darks = _query_tap(dark_adql, work_dir / "koa_dark_query.xml")
     # Darks are optional by design: the running sky subtraction removes
@@ -158,7 +158,7 @@ def query_night_calibrations(
         # Nearest flat night, preferring one with lamp-off pairs.
         def _score(day: str) -> tuple:
             rows = nearby[[str(d)[:10] == day for d in nearby["date_obs"]]]
-            has_off = any(str(k) == "flatlampoff" for k in rows["koaimtyp"])
+            has_off = any(str(k).lower() == "flatlampoff" for k in rows["koaimtyp"])
             distance = min(
                 abs((date_cls.fromisoformat(day) - d).days) for d in (d0, d1)
             )

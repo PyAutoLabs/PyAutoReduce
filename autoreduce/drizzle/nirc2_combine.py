@@ -24,10 +24,10 @@ import numpy as np
 
 from ..align.registration import offsets_to_reference
 from ..instruments import InstrumentAdapter
-from ..instruments.nirc2 import NIRC2_DETECTOR
 from ..target import TargetSpec
 
-# Margin (output pixels) around the union footprint of all aligned frames.
+# Margin (output pixels) around the union footprint of all aligned frames,
+# on top of the loaded distortion solution's own maximum shift.
 _GRID_MARGIN = 4
 
 
@@ -55,15 +55,17 @@ def build_pixmap(
     offset: Tuple[float, float],
     origin: Tuple[float, float],
     scale_ratio: float,
+    grids: Tuple[np.ndarray, np.ndarray] = None,
 ) -> np.ndarray:
     """
     The (ny, nx, 2) input->output pixel mapping drizzle consumes:
     rectify (distortion), align (frame offset), re-origin, and resample
     (native -> final scale). Axis order in the map is (x, y) per the
-    drizzle convention.
+    drizzle convention. `grids` lets callers hoist the (yy, xx) mgrid out
+    of a per-frame loop.
     """
     ny, nx = shape
-    yy, xx = np.mgrid[0.0:ny, 0.0:nx]
+    yy, xx = grids if grids is not None else np.mgrid[0.0:ny, 0.0:nx]
     y_rect = yy + distortion[0] - offset[0] - origin[0]
     x_rect = xx + distortion[1] - offset[1] - origin[1]
     pixmap = np.empty((ny, nx, 2), dtype=np.float64)
@@ -72,13 +74,13 @@ def build_pixmap(
     return pixmap
 
 
-def _frame_background_variance_e(header) -> float:
+def _frame_background_variance_e(header, detector) -> float:
     """Background variance (e-^2/pixel) from the frame's recorded facts."""
     coadds = int(header["COADDS"])
     itime = float(header["ITIME"])
     sky_e = float(header["SKYLEV"])
-    dark_e = NIRC2_DETECTOR.dark_e_per_s * itime * coadds
-    read_noise = NIRC2_DETECTOR.read_noise_e(
+    dark_e = detector.dark_e_per_s * itime * coadds
+    read_noise = detector.read_noise_e(
         int(header.get("SAMPMODE", 2)), int(header.get("MULTISAM", 1))
     )
     read_e2 = (read_noise**2) * coadds
@@ -111,24 +113,38 @@ def combine(
             f"open item (docs/design/keck_ao.md)"
         )
 
+    detector = adapter.ground_detector()
     frames, headers = [], []
     for path in exposures:
         with fits.open(path) as hdul:
             frames.append(hdul[0].data.astype(np.float64))
             headers.append(hdul[0].header.copy())
 
+    # One distortion solution per combine: prepared frames must agree (a
+    # set spanning the 2015-04-13 epoch boundary is rejected upstream at
+    # acquire, and again here in case of manually assembled stacks).
+    dist_keys = {(str(h["DISTX"]), str(h["DISTY"])) for h in headers}
+    if len(dist_keys) != 1:
+        raise ValueError(
+            f"prepared frames carry {len(dist_keys)} different distortion "
+            f"solutions ({sorted(dist_keys)}); frames must share one epoch"
+        )
     distortion = load_distortion(
         Path(headers[0]["DISTX"]), Path(headers[0]["DISTY"]), frames[0].shape
     )
     offsets = offsets_to_reference(frames)
     scale_ratio = adapter.native_scale / spec.final_scale
 
-    # Output grid: union footprint of the rectified, aligned frame corners.
+    # Output grid: union footprint of the rectified, aligned frame corners,
+    # padded by the distortion solution's own maximum shift (edge pixels can
+    # move by more than a fixed margin) plus a fixed safety margin.
     ny, nx = frames[0].shape
+    dist_margin_y = float(np.ceil(np.abs(distortion[0]).max()))
+    dist_margin_x = float(np.ceil(np.abs(distortion[1]).max()))
     corners_y, corners_x = [], []
     for dy, dx in offsets:
-        corners_y += [0.0 - dy, (ny - 1.0) - dy]
-        corners_x += [0.0 - dx, (nx - 1.0) - dx]
+        corners_y += [0.0 - dy - dist_margin_y, (ny - 1.0) - dy + dist_margin_y]
+        corners_x += [0.0 - dx - dist_margin_x, (nx - 1.0) - dx + dist_margin_x]
     origin = (min(corners_y), min(corners_x))
     out_ny = int(np.ceil((max(corners_y) - origin[0]) * scale_ratio)) + 2 * _GRID_MARGIN
     out_nx = int(np.ceil((max(corners_x) - origin[1]) * scale_ratio)) + 2 * _GRID_MARGIN
@@ -136,15 +152,17 @@ def combine(
 
     driz = Drizzle(kernel=spec.final_kernel, out_shape=(out_ny, out_nx), fillval=0.0)
     total_exptime = 0.0
+    grids = np.mgrid[0.0:ny, 0.0:nx]
     for frame, header, offset in zip(frames, headers, offsets):
         t_frame = float(header["ITIME"]) * int(header["COADDS"])
         if t_frame <= 0.0:
             raise ValueError(f"non-positive frame exposure time: {t_frame}")
-        var_cps2 = _frame_background_variance_e(header) / t_frame**2
+        var_cps2 = _frame_background_variance_e(header, detector) / t_frame**2
         weight = np.where(np.isfinite(frame), 1.0 / var_cps2, 0.0)
         data_cps = np.nan_to_num(frame, nan=0.0) / t_frame
         pixmap = build_pixmap(
-            frame.shape, distortion, offset, origin, scale_ratio
+            frame.shape, distortion, offset, origin, scale_ratio,
+            grids=(grids[0], grids[1]),
         )
         driz.add_image(
             data_cps,

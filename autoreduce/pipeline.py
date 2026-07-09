@@ -92,33 +92,95 @@ def _acquire_koa(ctx: _StageContext) -> None:
         cal_paths = koa_mod.download_frames(calib_table, target_dir, "cals")
         downloaded.append("cals")
 
-    psf_paths = sorted((target_dir / "psf").rglob("*.fits*"))
-    if spec.koa_psf_star_ids and not psf_paths:
-        star_table = koa_mod.query_science_frames(
-            spec.ra,
-            spec.dec,
-            adapter,
-            spec.filter_name,
-            ctx.work_dir,
-            koa_ids=spec.koa_psf_star_ids,
+    # The cached psf/ directory is consulted only when the *current* spec
+    # names PSF-star frames — a spec that dropped its ids must not inherit
+    # another run's stars (provenance would no longer match the products).
+    psf_paths = []
+    if spec.koa_psf_star_ids:
+        psf_paths = sorted((target_dir / "psf").rglob("*.fits*"))
+        if not psf_paths:
+            star_table = koa_mod.query_science_frames(
+                spec.ra,
+                spec.dec,
+                adapter,
+                spec.filter_name,
+                ctx.work_dir,
+                koa_ids=spec.koa_psf_star_ids,
+            )
+            psf_paths = koa_mod.download_frames(star_table, target_dir, "psf")
+            downloaded.append("psf")
+
+    # Pointing coherence (the KOA analogue of the MAST footprint filter):
+    # header pointings must cluster — an unpinned cone query can pull in
+    # frames pointed at a nearby star or neighbouring target (the SHARP
+    # PSF-star pointings sit only ~20" from the lens).
+    _assert_pointing_coherence(exposures, spec)
+
+    star_facts = (
+        koa_mod.frame_facts_from_headers(psf_paths) if psf_paths else []
+    )
+    all_mjds = [f["mjd"] for f in facts] + [f["mjd"] for f in star_facts]
+    epochs = {
+        koa_mod.distortion_solution_for_mjd(m) for m in all_mjds
+    }
+    if len(epochs) != 1:
+        raise ValueError(
+            f"frame set spans the 2015-04-13 distortion-epoch boundary "
+            f"({sorted(epochs)}); reduce each epoch as its own target spec"
         )
-        psf_paths = koa_mod.download_frames(star_table, target_dir, "psf")
-        downloaded.append("psf")
     distortion_prov = koa_mod.sync_distortion_solution(
         cache.references_dir, adapter, mjd=facts[0]["mjd"]
     )
+    # Local absolute paths are working state (the prepared-frame headers
+    # need them), never provenance — reduction.json must stay host-portable.
+    ctx.ground["distortion"] = distortion_prov
+    portable_prov = {
+        k: v for k, v in distortion_prov.items() if k != "distortion_paths"
+    }
     ctx.exposures = [f["path"] for f in facts]
     ctx.ground["cal_paths"] = cal_paths
     ctx.ground["psf_raw_paths"] = psf_paths
-    ctx.ground["distortion"] = distortion_prov
     ctx.record["acquire"] = {
         "n_exposures": len(ctx.exposures),
         "exposures": [Path(p).name for p in ctx.exposures],
         "n_calibration_frames": len(cal_paths),
         "n_psf_star_frames": len(psf_paths),
         "downloaded": downloaded,
-        **distortion_prov,
+        **portable_prov,
     }
+
+
+def _assert_pointing_coherence(
+    exposures, spec: TargetSpec, max_scatter_arcsec: float = 10.0
+) -> None:
+    """
+    All science frames must point at the same field: loud on outliers from
+    the median pointing beyond the dither budget (`max_scatter_arcsec` plus
+    the cutout extent). Raw-header pointing is arcsecond-grade, which is
+    exactly good enough to catch a different-pointing contaminant.
+    """
+    from astropy.io import fits
+
+    ras, decs, names = [], [], []
+    for path in exposures:
+        header = fits.getheader(path)
+        ras.append(float(header["RA"]))
+        decs.append(float(header["DEC"]))
+        names.append(Path(path).name)
+    ra0, dec0 = np.median(ras), np.median(decs)
+    cos_dec = np.cos(np.radians(dec0))
+    sep = 3600.0 * np.hypot(
+        (np.asarray(ras) - ra0) * cos_dec, np.asarray(decs) - dec0
+    )
+    budget = max_scatter_arcsec + 0.5 * max(spec.cutout_shape) * spec.final_scale
+    outliers = [n for n, s in zip(names, sep) if s > budget]
+    if outliers:
+        raise ValueError(
+            f"{len(outliers)} science frame(s) point > {budget:.0f}\" from "
+            f"the median pointing ({outliers[:5]}...) — a cone query likely "
+            f"caught a different pointing (PSF star / neighbour); pin the "
+            f"frame set with koa_science_ids"
+        )
 
 
 def _acquire(ctx: _StageContext) -> None:
@@ -188,41 +250,58 @@ def _align(ctx: _StageContext) -> None:
 
 
 def _prepare_keck_frames(
-    ctx: _StageContext, raw_paths, calib, sky_window: int, tag: str
+    ctx: _StageContext, raw_paths, calib, sky_window: int, tag: str,
+    sky_group_gap_s: float = 3600.0,
 ):
-    """Calibrate + sky-subtract one raw frame set; write prepared FITS."""
+    """
+    Calibrate + sky-subtract one raw frame set; write prepared FITS.
+
+    The sky is estimated within temporally contiguous groups only
+    (``sky_group_gap_s`` splits nights and interleaved PSF-star visits) —
+    window adjacency across a gap would borrow sky from a different
+    night/visit, which the K'-band variability timescale forbids.
+    """
     from astropy.io import fits
 
     from .acquire import koa as koa_mod
     from .calibrate import calibrate_frame
-    from .instruments.nirc2 import NIRC2_DETECTOR
-    from .sky import running_sky_subtract
+    from .sky import group_by_time_gaps, running_sky_subtract
 
+    detector = ctx.adapter.ground_detector()
     facts = koa_mod.frame_facts_from_headers(raw_paths)
     frames = [
         calibrate_frame(
             fits.getdata(f["path"]).astype(float),
             calib,
-            NIRC2_DETECTOR.gain_e_per_dn,
+            detector.gain_e_per_dn,
             f["coadds"],
         )
         for f in facts
     ]
-    if len(frames) >= 2:
-        subtracted, sky_prov = running_sky_subtract(
-            frames, window=min(sky_window, len(frames) - 1)
+    subtracted = [None] * len(frames)
+    sky_levels = [None] * len(frames)
+    group_recipes = []
+    groups = group_by_time_gaps([f["mjd"] for f in facts], gap_s=sky_group_gap_s)
+    for group in groups:
+        group_sub, group_prov = running_sky_subtract(
+            [frames[j] for j in group],
+            window=min(sky_window, max(1, len(group) - 1)),
         )
-    else:
-        # Single-frame set (short PSF-star visits): its own sigma-clipped
-        # median is the only sky estimate available — recorded, never silent.
-        from astropy.stats import sigma_clipped_stats
-
-        level, _, _ = sigma_clipped_stats(frames[0][np.isfinite(frames[0])])
-        subtracted = [frames[0] - level]
-        sky_prov = {
-            "recipe": "single frame: own sigma-clipped median",
-            "sky_levels_e": [float(level)],
-        }
+        for j, sub, level in zip(
+            group, group_sub, group_prov["sky_levels_e"]
+        ):
+            subtracted[j] = sub
+            sky_levels[j] = level
+        group_recipes.append(
+            {"n_frames": len(group), "recipe": group_prov["recipe"]}
+        )
+    sky_prov = {
+        "recipe": "per-contiguous-group scaled running sky "
+        f"(gap > {sky_group_gap_s:.0f}s starts a new group)",
+        "groups": group_recipes,
+        "window": int(sky_window),
+        "sky_levels_e": sky_levels,
+    }
 
     prepared_dir = ctx.work_dir / f"prepared_{tag}"
     prepared_dir.mkdir(parents=True, exist_ok=True)
@@ -256,7 +335,6 @@ def _ground_prepare(ctx: _StageContext) -> None:
         return
     from .acquire import koa as koa_mod
     from .calibrate import build_calibrations, load_calibration_sets
-    from .instruments.nirc2 import NIRC2_DETECTOR
 
     facts = koa_mod.frame_facts_from_headers(ctx.exposures)
     setups = {(f["itime"], f["coadds"]) for f in facts}
@@ -271,7 +349,7 @@ def _ground_prepare(ctx: _StageContext) -> None:
     )
     calib = build_calibrations(darks, flat_on, flat_off)
     ctx.record["calibrate"] = {
-        "gain_e_per_dn": NIRC2_DETECTOR.gain_e_per_dn,
+        "gain_e_per_dn": ctx.adapter.ground_detector().gain_e_per_dn,
         **calib.provenance,
     }
 
@@ -286,6 +364,10 @@ def _ground_prepare(ctx: _StageContext) -> None:
 
         # PSF-star visits use their own (shorter) ITIME; the science-matched
         # master dark does not apply — the running sky carries their dark.
+        # Visits minutes apart are distinct AO/sky epochs: the tighter gap
+        # matches nirc2_star.EPOCH_GAP_S so sky groups align with PSF epochs.
+        from .psf.nirc2_star import EPOCH_GAP_S
+
         star_calib = dataclasses.replace(calib, master_dark=None)
         star_prepared, star_mjds, star_sky_prov = _prepare_keck_frames(
             ctx,
@@ -293,6 +375,7 @@ def _ground_prepare(ctx: _StageContext) -> None:
             star_calib,
             ctx.spec.sky_window,
             tag="psfstar",
+            sky_group_gap_s=EPOCH_GAP_S,
         )
         ctx.ground["psf_prepared"] = star_prepared
         ctx.ground["psf_mjds"] = star_mjds
@@ -365,6 +448,12 @@ def _psf(ctx: _StageContext, sci, header):
     from astropy.wcs import WCS
 
     spec, adapter = ctx.spec, ctx.adapter
+    if adapter.observatory == "keck":
+        # Any keck re-run clears candidates from previous runs first — a run
+        # with fewer surviving epochs (or a tier-B fallback) must not leave
+        # stale kernels behind for candidate-globbing consumers.
+        for stale in ctx.out_dir.glob("psf_candidate_*.fits"):
+            stale.unlink()
     if adapter.observatory == "keck" and ctx.ground.get("psf_prepared"):
         # Tier A (keck_ao.md stage 6): PSF-star epochs reduced
         # pipeline-identically; every epoch ships as a candidate.
@@ -377,10 +466,6 @@ def _psf(ctx: _StageContext, sci, header):
             adapter,
             ctx.work_dir,
         )
-        # Clear candidates from any previous run first — a re-run with fewer
-        # surviving epochs must not leave stale kernels behind.
-        for stale in ctx.out_dir.glob("psf_candidate_*.fits"):
-            stale.unlink()
         for i, candidate in enumerate(candidates):
             fits.PrimaryHDU(candidate.astype(np.float32)).writeto(
                 ctx.out_dir / f"psf_candidate_{i}.fits", overwrite=True
@@ -399,6 +484,20 @@ def _psf(ctx: _StageContext, sci, header):
         )
         if max_single_exptime <= 0.0:
             raise ValueError("no exposure carries a positive EXPTIME header")
+        peak_max = (
+            selection.saturation_fraction
+            * adapter.saturation_dn
+            / max_single_exptime
+        )
+    elif adapter.observatory == "keck":
+        # Tier B in-field ePSF on an e-/s mosaic: the same per-exposure
+        # full-well cap as HST applies, from the prepared frames' own
+        # ITIME x COADDS (the longest single frame bounds the star rate
+        # that stays linear).
+        max_single_exptime = max(
+            float(fits.getheader(p)["ITIME"]) * int(fits.getheader(p)["COADDS"])
+            for p in ctx.exposures
+        )
         peak_max = (
             selection.saturation_fraction
             * adapter.saturation_dn
@@ -466,8 +565,11 @@ def _package(ctx: _StageContext, sci, header, wht, noise, psf, psf_full) -> None
     fits.PrimaryHDU(psf_full.astype(np.float32)).writeto(
         out_dir / "psf_full.fits", overwrite=True
     )
+    products = ["data.fits", "noise_map.fits", "psf.fits", "psf_full.fits"]
+    # Tier-A keck reductions also ship the PSF-star epoch candidates.
+    products += sorted(p.name for p in out_dir.glob("psf_candidate_*.fits"))
     ctx.record["package"] = {
-        "products": ["data.fits", "noise_map.fits", "psf.fits", "psf_full.fits"],
+        "products": products,
         "cutout_shape": list(spec.cutout_shape),
         "pixel_scale": spec.final_scale,
         # Backend-agnostic: both backends stamp BUNIT on the mosaic header.

@@ -121,9 +121,22 @@ class TestRunningSky:
         core = subtracted[4][22:26, 22:26]
         assert np.median(core) > 400.0
 
-    def test_single_frame_rejected(self):
-        with pytest.raises(ValueError, match=">= 2 frames"):
-            running_sky_subtract(self._frames(n=1), window=4)
+    def test_single_frame_uses_own_median(self):
+        # A lone frame (short PSF-star visit) gets its own sigma-clipped
+        # median as the sky, with the fallback recipe recorded.
+        subtracted, prov = running_sky_subtract(self._frames(n=1), window=4)
+        assert "own sigma-clipped median" in prov["recipe"]
+        background = np.concatenate(
+            [subtracted[0][:10].ravel(), subtracted[0][-10:].ravel()]
+        )
+        assert abs(np.median(background)) < 5.0
+
+    def test_time_gap_grouping(self):
+        from autoreduce.sky import group_by_time_gaps
+
+        mjds = [59000.0, 59000.001, 59000.5, 59000.501, 59001.5]
+        groups = group_by_time_gaps(mjds, gap_s=600.0)
+        assert [sorted(g) for g in groups] == [[0, 1], [2, 3], [4]]
 
 
 class TestRegistration:

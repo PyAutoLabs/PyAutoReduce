@@ -155,8 +155,14 @@ def phase4_checks(spec, record):
     predicted_floor = float(np.nanmedian(noise[noise < np.nanpercentile(noise, 50)]))
     closure = empirical * r_factor**2 / predicted_floor
 
-    # Check 2 — PSF core FWHM vs SHARP's ~65-70 mas.
+    # Check 2 — PSF core FWHM vs SHARP's ~65-70 mas. A tier-B fallback
+    # (no candidates key) is reported explicitly, never as an empty pass.
     psf_diag = record["psf"]
+    if "candidates" not in psf_diag:
+        raise RuntimeError(
+            f"reduction fell back to a non-tier-A PSF ({psf_diag.get('method')}) "
+            f"— the B1938 acceptance run requires PSF-star candidates"
+        )
     checks = {
         "blank_sky_closure_empirical_R2_over_predicted": round(closure, 3),
         "closure_pass_0.6_1.6": bool(0.6 < closure < 1.6),

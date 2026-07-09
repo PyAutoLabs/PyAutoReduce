@@ -89,6 +89,7 @@ _COMMON = dict(
     combine_backend="nirc2_native",
     mast_obs_collection="",
     archive="koa",
+    detector=NIRC2_DETECTOR,
     default_drizzle_kwargs={},  # the native backend reads TargetSpec dials
     saturation_dn=18_000.0 * 4.0,  # shallow NIR well: ~18 kDN linearity limit
 )

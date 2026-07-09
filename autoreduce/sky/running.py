@@ -1,23 +1,47 @@
 """
 Running sky from temporally adjacent, object-masked frames.
 
-The Auger-method recipe the SHARP reductions descend from: for each dithered
-science frame, the sky is the median over the nearest-in-time window of
-*other* frames, with objects masked so they never imprint on the sky model,
-and the mask refined once from the first-pass sky-subtracted frames. The
-frame's own data never contributes to its own sky. K'-band sky varies on
-minutes timescales, which is exactly why the window is temporal, not global.
+The Auger-method recipe the SHARP reductions descend from, as **scaled sky**:
+for each frame, the sky *structure* is the median over the object-masked,
+unit-median-normalised window of temporally adjacent frames, and the sky
+*level* is the frame's own masked median — which removes the bias a drifting
+K'-band sky (minutes timescales) puts on edge-of-sequence frames. The mask
+is refined once from the first-pass residuals. A frame never contributes to
+its own sky.
+
+Callers must pass a **temporally contiguous** frame set: use
+``group_by_time_gaps`` to split multi-night science or interleaved PSF-star
+visits first — window adjacency is positional, so a set spanning a gap would
+silently borrow sky from a different night/visit. A single-frame group falls
+back to its own sigma-clipped median (the only estimate available), with the
+recipe recorded.
 
 Sky levels (e- per frame) are returned per frame — the noise stage's
 background variance term is built from them. B-spline residual-background
-modelling is a documented open item, not silently absent (the 10-40"
-NIRC2 fields are flat at the level the blank-sky closure tests).
+modelling is a documented open item, not silently absent.
 """
 
 import warnings
-from typing import Dict, List, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
+
+from ..noise.rms import mad_sigma
+
+
+def group_by_time_gaps(mjds: Sequence[float], gap_s: float) -> List[List[int]]:
+    """Indices grouped into temporally contiguous runs split at MJD gaps."""
+    if len(mjds) == 0:
+        raise ValueError("no frames to group")
+    order = sorted(range(len(mjds)), key=lambda i: mjds[i])
+    groups, current = [], [order[0]]
+    for prev, this in zip(order, order[1:]):
+        if (mjds[this] - mjds[prev]) * 86400.0 > gap_s:
+            groups.append(current)
+            current = []
+        current.append(this)
+    groups.append(current)
+    return groups
 
 
 def _object_mask(frame: np.ndarray, n_sigma: float = 3.0) -> np.ndarray:
@@ -26,7 +50,7 @@ def _object_mask(frame: np.ndarray, n_sigma: float = 3.0) -> np.ndarray:
     if not finite.any():
         raise ValueError("frame has no finite pixels — calibration produced garbage")
     centre = np.median(frame[finite])
-    spread = 1.4826 * np.median(np.abs(frame[finite] - centre))
+    spread = mad_sigma(frame)
     if spread <= 0.0:
         return ~finite
     return (~finite) | (frame > centre + n_sigma * spread)
@@ -34,11 +58,6 @@ def _object_mask(frame: np.ndarray, n_sigma: float = 3.0) -> np.ndarray:
 
 def _window_indices(i: int, n: int, window: int) -> List[int]:
     """Indices of the `window` frames nearest in sequence to i, excluding i."""
-    if n < 2:
-        raise ValueError(
-            "running sky needs >= 2 frames; a single-frame reduction has no "
-            "sky model — observe a sky or use a wider dither set"
-        )
     order = sorted(range(n), key=lambda j: (abs(j - i), j))
     return [j for j in order if j != i][: max(1, min(window, n - 1))]
 
@@ -49,23 +68,33 @@ def running_sky_subtract(
     n_sigma: float = 3.0,
 ) -> Tuple[List[np.ndarray], Dict]:
     """
-    Subtract a per-frame running sky; return (subtracted frames, provenance).
+    Subtract a per-frame sky; return (subtracted frames, provenance).
 
     Two passes: object masks from the raw frames seed the first sky; the
     masks are then rebuilt from the first-pass subtracted frames (fainter
     wings emerge once the sky pedestal is gone) and the sky re-estimated.
-    Masked pixels fall back to the unmasked median sky of the window frame —
-    a sky estimate must exist everywhere or the frame is unusable.
     """
     n = len(frames)
+    if n == 1:
+        # A lone frame has no neighbours: its own masked median is the only
+        # sky estimate available (short PSF-star visits). Recorded, never
+        # silent.
+        from astropy.stats import sigma_clipped_stats
+
+        frame = frames[0]
+        level, _, _ = sigma_clipped_stats(frame[np.isfinite(frame)])
+        provenance = {
+            "recipe": "single frame: own sigma-clipped median",
+            "window": 0,
+            "mask_n_sigma": float(n_sigma),
+            "sky_levels_e": [float(level)],
+            "masked_fraction_final": [float(_object_mask(frame, n_sigma).mean())],
+        }
+        return [frame - level], provenance
+
     masks = [_object_mask(f, n_sigma) for f in frames]
 
     def one_pass(current_masks):
-        # Scaled sky, the standard NIR recipe: each neighbour is normalised
-        # to unit median before combining, so the model carries the sky
-        # *structure*; the *level* is the frame's own masked median. This
-        # removes the bias a drifting sky level puts on edge-of-sequence
-        # frames, whose temporal windows are one-sided.
         masked_medians = []
         for frame, mask in zip(frames, current_masks):
             sky_pixels = frame[~mask & np.isfinite(frame)]
@@ -77,26 +106,30 @@ def running_sky_subtract(
                 )
             masked_medians.append(float(np.median(sky_pixels)))
 
+        # Normalise each frame to unit median once per pass; every window
+        # that references frame j reuses the same array.
+        normalised = []
+        for j, (frame, mask) in enumerate(zip(frames, current_masks)):
+            if masked_medians[j] <= 0.0:
+                raise ValueError(
+                    f"frame {j} has non-positive sky level "
+                    f"({masked_medians[j]}); raw NIR frames must carry "
+                    f"a positive sky pedestal — calibration is broken"
+                )
+            normalised.append(
+                np.where(mask, np.nan, frame / masked_medians[j])
+            )
+
         subtracted = []
         for i, frame in enumerate(frames):
-            neighbour_stack = []
-            for j in _window_indices(i, n, window):
-                if masked_medians[j] <= 0.0:
-                    raise ValueError(
-                        f"frame {j} has non-positive sky level "
-                        f"({masked_medians[j]}); raw NIR frames must carry "
-                        f"a positive sky pedestal — calibration is broken"
-                    )
-                neighbour = frames[j] / masked_medians[j]
-                neighbour = np.where(current_masks[j], np.nan, neighbour)
-                neighbour_stack.append(neighbour)
-            stack = np.stack(neighbour_stack)
+            stack = np.stack(
+                [normalised[j] for j in _window_indices(i, n, window)]
+            )
             with np.errstate(all="ignore"), warnings.catch_warnings():
                 # All-NaN columns are expected (pixels masked in every window
                 # frame) and handled as holes right below.
                 warnings.simplefilter("ignore", category=RuntimeWarning)
                 structure = np.nanmedian(stack, axis=0)
-            # Pixels masked in every window frame still need a sky value.
             holes = ~np.isfinite(structure)
             if holes.all():
                 raise ValueError(

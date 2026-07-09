@@ -35,6 +35,20 @@ class InstrumentAdapter:
     # night's own calibrations, so they also run the pre-combine ground
     # stages (calibrate, sky) that space-based level-2 products make moot.
     archive: str = "mast"  # "mast" | "koa"
+    # Detector constants for ground-based calibration/noise (gain, read
+    # noise, dark). Adapter-owned so stages outside `instruments/` never
+    # name a detector; None for space-based instruments, whose level-2
+    # products carry calibrated units already.
+    detector: object = None
+
+    def ground_detector(self):
+        """The detector constants, loud when a ground stage needs them."""
+        if self.detector is None:
+            raise ValueError(
+                f"instrument {self.key!r} has no detector constants — "
+                f"ground-based stages require them on the adapter"
+            )
+        return self.detector
 
     def scale_ratio(self, final_scale: float) -> float:
         """s = output scale / native scale, as used by the Casertano factor."""

@@ -70,9 +70,11 @@ def build_calibrations(
     master_dark = None
     hot = np.zeros_like(dead)
     if dark_frames:
+        from ..noise.rms import mad_sigma
+
         master_dark = _median_stack(dark_frames)
         centre = np.median(master_dark)
-        spread = 1.4826 * np.median(np.abs(master_dark - centre))  # MAD sigma
+        spread = mad_sigma(master_dark)
         if spread > 0:
             hot = master_dark > centre + hot_sigma * spread
 

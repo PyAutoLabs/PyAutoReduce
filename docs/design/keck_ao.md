@@ -85,3 +85,18 @@ checks 3-4 complete after the first reduced dataset lands.
   10" narrow field is flat at the level the blank-sky closure tests.
 - **KOA proprietary data**: anonymous public access only; PI login is a
   PyKOA feature the acquire seam can adopt when needed.
+- **Orchestrator dispatch**: pipeline.py currently branches on
+  `adapter.archive` / `adapter.observatory` at five points; folding these
+  into adapter-declared capabilities (the way `combine_backend` already
+  dispatches) is the refactor that keeps a third ground-based instrument
+  from touching the orchestrator.
+- **Prepared-frame header schema**: the ITIME/COADDS/SAMPMODE/MULTISAM/
+  SKYLEV/DISTX/DISTY contract between `_prepare_keck_frames` and
+  `nirc2_combine` lives as matching keyword literals; a shared typed
+  header schema would break at the write site instead of the read site.
+- **Header GAIN cross-check**: detector gain is the adapter constant
+  (closure-validated at 4.0); reading the frame's own GAIN keyword as a
+  cross-check with provenance would catch a changed electronics setup.
+- **FWHM estimators**: tier-A (`nirc2_star`, equivalent-area) and tier-1/B
+  (`epsf`, radial-profile) use different definitions; unify before
+  cross-tier FWHM comparisons are load-bearing.

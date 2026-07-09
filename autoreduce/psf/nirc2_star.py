@@ -23,6 +23,8 @@ from typing import Dict, List, Tuple
 import numpy as np
 
 from ..instruments import InstrumentAdapter
+from ..noise.rms import mad_sigma
+from ..sky import group_by_time_gaps
 from ..target import TargetSpec
 from .epsf import normalise_kernel
 
@@ -33,15 +35,7 @@ def group_epochs(mjds: List[float], gap_s: float = EPOCH_GAP_S) -> List[List[int
     """Frame indices grouped into contiguous visits by MJD gaps."""
     if not mjds:
         raise ValueError("no PSF-star frames to group")
-    order = sorted(range(len(mjds)), key=lambda i: mjds[i])
-    groups, current = [], [order[0]]
-    for prev, this in zip(order, order[1:]):
-        if (mjds[this] - mjds[prev]) * 86400.0 > gap_s:
-            groups.append(current)
-            current = []
-        current.append(this)
-    groups.append(current)
-    return groups
+    return group_by_time_gaps(mjds, gap_s=gap_s)
 
 
 def _centre_on_peak(sci: np.ndarray, half: int) -> np.ndarray:
@@ -98,12 +92,11 @@ def build_candidates(
         epoch_spec = replace(spec, name=f"{spec.name}_psfstar{i}")
         epoch_dir = Path(work_dir) / f"psf_epoch_{i}"
         epoch_dir.mkdir(parents=True, exist_ok=True)
+        # Single-frame epochs cannot register/reject (no outlier protection);
+        # combine still resamples through the identical mapping (drizzled-PSF
+        # invariant), and the sharpness vetting below catches CR-dominated
+        # results.
         paths = [star_frame_paths[j] for j in group]
-        if len(paths) == 1:
-            # A single-frame epoch cannot register/reject; combine still
-            # resamples it through the identical mapping (drizzled-PSF
-            # invariant), it just carries no outlier protection.
-            pass
         sci_path, _, _ = nirc2_combine.combine(paths, epoch_spec, adapter, epoch_dir)
         sci = fits.getdata(sci_path).astype(np.float64)
         window = _centre_on_peak(sci, half_full)
@@ -117,7 +110,7 @@ def build_candidates(
             [window[0], window[-1], window[1:-1, 0], window[1:-1, -1]]
         )
         window = window - np.nanmedian(ring)
-        ring_mad = 1.4826 * np.nanmedian(np.abs(ring - np.nanmedian(ring)))
+        ring_mad = mad_sigma(ring)
         h = window.shape[0] // 2
         core = window[h - 1 : h + 2, h - 1 : h + 2].sum()
         total = np.nansum(window)

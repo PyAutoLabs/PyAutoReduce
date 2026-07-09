@@ -32,7 +32,9 @@ def covers_target(path: Path, ra: float, dec: float, margin_arcsec: float) -> bo
         for hdu in hdul:
             if hdu.name != "SCI" or hdu.data is None:
                 continue
-            wcs = WCS(hdu.header, naxis=2)
+            # fobj: HST headers carry lookup-table distortion (CPDIS/D2IM)
+            # that astropy can only resolve with the open HDUList in hand.
+            wcs = WCS(hdu.header, fobj=hdul, naxis=2)
             ny, nx = hdu.data.shape[-2], hdu.data.shape[-1]
             x, y = wcs.world_to_pixel_values(ra, dec)
             if not (np.isfinite(x) and np.isfinite(y)):

@@ -16,8 +16,6 @@ import json
 import sys
 from pathlib import Path
 
-import numpy as np
-
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
@@ -56,64 +54,19 @@ def spec_for(band: str) -> TargetSpec:
     )
 
 
-def subpixel_offset(a, b):
-    a0 = np.nan_to_num(a - np.nanmedian(a))
-    b0 = np.nan_to_num(b - np.nanmedian(b))
-    corr = np.fft.fftshift(
-        np.fft.irfft2(np.fft.rfft2(a0) * np.conj(np.fft.rfft2(b0)), s=a0.shape)
-    )
-    peak = np.unravel_index(np.argmax(corr), corr.shape)
-
-    def parabolic(axis):
-        prev = list(peak); prev[axis] -= 1
-        nxt = list(peak); nxt[axis] += 1
-        if min(prev[axis], 0) < 0 or nxt[axis] >= corr.shape[axis]:
-            return 0.0
-        cm, c0, cp = corr[tuple(prev)], corr[peak], corr[tuple(nxt)]
-        denom = cm - 2 * c0 + cp
-        return 0.0 if denom == 0 else 0.5 * (cm - cp) / denom
-
-    return (
-        peak[0] - a.shape[0] // 2 + parabolic(0),
-        peak[1] - a.shape[1] // 2 + parabolic(1),
-    )
-
-
 def compare(band: str, out_dir: Path) -> dict:
     from astropy.io import fits
-    from scipy.ndimage import shift as nd_shift
+
+    from autoreduce.validation import registered_ratios
 
     new_data = fits.getdata(out_dir / "data.fits").astype(float)
     new_noise = fits.getdata(out_dir / "noise_map.fits").astype(float)
     demo_dir = DEMO_ROOT / band
     demo_data = fits.getdata(demo_dir / "data.fits").astype(float)
     demo_noise = fits.getdata(demo_dir / "noise_map.fits").astype(float)
-
-    if new_data.shape != demo_data.shape:
-        raise ValueError(
-            f"{band}: shape mismatch new {new_data.shape} vs demo {demo_data.shape}"
-        )
-
-    dy, dx = subpixel_offset(demo_data, new_data)
-    new_data_r = nd_shift(np.nan_to_num(new_data), (dy, dx), order=3)
-    new_noise_r = nd_shift(np.nan_to_num(new_noise), (dy, dx), order=1)
-
-    bright = demo_data > 10 * np.nanmedian(demo_noise)
-    data_ratio = new_data_r[bright] / demo_data[bright]
-    # Exclude masked-by-noise pixels (1e8) and their shift-interpolation
-    # bleed from the parity statistics.
-    valid = new_noise_r < 1.0e6
-    noise_ratio = np.where(valid, new_noise_r / demo_noise, np.nan)
     return {
         "band": band,
-        "offset": [float(dy), float(dx)],
-        "n_bright": int(bright.sum()),
-        "data_ratio_median": float(np.nanmedian(data_ratio)),
-        "noise_ratio_median": float(np.nanmedian(noise_ratio)),
-        "noise_ratio_16_84": [
-            float(np.nanpercentile(noise_ratio, 16)),
-            float(np.nanpercentile(noise_ratio, 84)),
-        ],
+        **registered_ratios(new_data, new_noise, demo_data, demo_noise),
     }
 
 

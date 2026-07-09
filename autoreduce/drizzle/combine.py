@@ -15,8 +15,6 @@ from typing import Dict, List, Tuple
 
 from ..instruments import InstrumentAdapter
 from ..target import TargetSpec
-from .diagnostics import check_weight_uniformity
-from ..noise.rms import casertano_r
 
 
 def drizzle_kwargs_for(spec: TargetSpec, adapter: InstrumentAdapter, n_exposures: int) -> Dict:
@@ -66,28 +64,21 @@ def combine(
     from astropy.io import fits
     from drizzlepac import astrodrizzle
 
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    from ._common import chdir_scratch, combine_provenance
+
     # Drizzlepac lowercases output filenames internally, which breaks absolute
-    # paths containing capitals on case-sensitive filesystems — so chdir into
-    # the work dir and pass a relative, already-lowercase output root. This
+    # paths containing capitals on case-sensitive filesystems — so run inside
+    # the scratch dir with a relative, already-lowercase output root. This
     # also keeps AstroDrizzle's cwd scratch files contained.
     output_name = f"{spec.name}_{spec.filter_name}".lower()
-    output_root = str(output_dir / output_name)
-
     kwargs = drizzle_kwargs_for(spec, adapter, len(exposures))
-    import os
-
-    cwd = os.getcwd()
-    os.chdir(output_dir)
-    try:
+    with chdir_scratch(output_dir) as output_dir:
         astrodrizzle.AstroDrizzle(
             input=[str(p) for p in exposures],
             output=output_name,
             **kwargs,
         )
-    finally:
-        os.chdir(cwd)
+    output_root = str(output_dir / output_name)
 
     def _one(suffix: str) -> Path:
         hits = sorted(glob.glob(f"{output_root}*{suffix}"))
@@ -100,15 +91,12 @@ def combine(
     sci = _one("_sci.fits")
     wht = _one("_wht.fits")
 
-    wht_data = fits.getdata(wht)
-    provenance = {
-        "n_exposures": len(exposures),
-        "exposures": [Path(p).name for p in exposures],
-        "single_exposure_branch": len(exposures) == 1,
-        "drizzle_kwargs": {k: kwargs[k] for k in sorted(kwargs)},
-        "correlated_noise_factor": casertano_r(
-            spec.final_pixfrac, adapter.scale_ratio(spec.final_scale)
-        ),
-        "weight_uniformity": check_weight_uniformity(wht_data),
-    }
+    provenance = combine_provenance(
+        spec,
+        adapter,
+        exposures,
+        fits.getdata(wht),
+        kwargs_key="drizzle_kwargs",
+        kwargs={k: kwargs[k] for k in sorted(kwargs)},
+    )
     return sci, wht, provenance

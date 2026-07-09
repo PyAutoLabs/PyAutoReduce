@@ -8,8 +8,9 @@ alongside the data products. Heavy dependencies (astroquery, drizzlepac,
 photutils) are imported inside stages so the package imports without them.
 """
 
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -20,6 +21,8 @@ from .acquire import footprint as footprint_mod
 from .acquire import mast as mast_mod
 from .align import diagnostics as align_mod
 from .drizzle import combine as combine_mod
+from .drizzle.diagnostics import check_weight_uniformity
+from .instruments import InstrumentAdapter
 from .noise import rms as rms_mod
 from .package import cutout as cutout_mod
 from .package import provenance as provenance_mod
@@ -28,24 +31,22 @@ from .psf import stars as stars_mod
 from .target import TargetSpec
 
 
-def reduce_target(
-    spec: TargetSpec,
-    cache_root: Path,
-    output_root: Path,
-    size_cap_bytes: Optional[int] = None,
-    evict_when_done: bool = False,
-) -> Dict:
-    """Run the full pipeline for one target; returns the provenance record."""
-    adapter = instruments.get(spec.instrument)
-    cache = cache_mod.ExposureCache(Path(cache_root), size_cap_bytes=size_cap_bytes)
-    out_dir = Path(output_root) / spec.name
-    out_dir.mkdir(parents=True, exist_ok=True)
-    work_dir = out_dir / "work"
-    work_dir.mkdir(exist_ok=True)
+@dataclass
+class _StageContext:
+    """Everything the stages share; `record` is the growing provenance."""
 
-    record: Dict = {"target": spec.as_dict(), "instrument": adapter.key}
+    spec: TargetSpec
+    adapter: InstrumentAdapter
+    cache: cache_mod.ExposureCache
+    out_dir: Path
+    work_dir: Path
+    record: Dict = field(default_factory=dict)
+    exposures: List[Path] = field(default_factory=list)
 
-    # -- acquire ------------------------------------------------------------
+
+def _acquire(ctx: _StageContext) -> None:
+    """Download (or reuse) exposures, sync references, footprint-filter."""
+    spec, adapter, cache = ctx.spec, ctx.adapter, ctx.cache
     crds_mod.configure_environment(cache.references_dir, adapter)
     exposures = cache.exposures_for(spec.name)
     downloaded = False
@@ -81,7 +82,8 @@ def reduce_target(
     exposures, skipped = footprint_mod.filter_to_target(
         exposures, spec.ra, spec.dec, margin_arcsec=cutout_extent + 15.0
     )
-    record["acquire"] = {
+    ctx.exposures = exposures
+    ctx.record["acquire"] = {
         "n_exposures": len(exposures),
         "exposures": [Path(p).name for p in exposures],
         "n_skipped_off_target": len(skipped),
@@ -89,19 +91,22 @@ def reduce_target(
         "references_synced": refs_synced,
     }
 
-    # -- align ----------------------------------------------------------------
-    record["align"] = {
-        "wcs_solutions": align_mod.wcs_solution_names(exposures),
+
+def _align(ctx: _StageContext) -> None:
+    ctx.record["align"] = {
+        "wcs_solutions": align_mod.wcs_solution_names(ctx.exposures),
         "tweakreg_run": False,  # a-priori WCS accepted by default (stage 2)
     }
 
-    # -- drizzle ---------------------------------------------------------------
-    sci_path, wht_path, drizzle_prov = combine_mod.combine(
-        exposures, spec, adapter, work_dir
-    )
-    record["drizzle"] = drizzle_prov
 
+def _combine(ctx: _StageContext):
+    """Run the backend combine; load the mosaic; return (sci, header, wht, exptime)."""
     from astropy.io import fits
+
+    sci_path, wht_path, drizzle_prov = combine_mod.combine(
+        ctx.exposures, ctx.spec, ctx.adapter, ctx.work_dir
+    )
+    ctx.record["drizzle"] = drizzle_prov
 
     with fits.open(sci_path) as hdul:
         sci = hdul[0].data.astype(float)
@@ -111,14 +116,18 @@ def reduce_target(
     # Only the HST noise construction divides by exposure time; the JWST path
     # reads propagated ERR and needs no exptime — record it if present, but
     # never hard-fail a reduction that doesn't use it.
-    if adapter.combine_backend != "jwst_image3" and (
+    if ctx.adapter.combine_backend != "jwst_image3" and (
         exptime is None or exptime <= 0
     ):
         raise ValueError(f"mosaic header carries no positive EXPTIME: {exptime}")
-    exptime = float(exptime) if exptime else 0.0
+    return sci, header, wht, float(exptime) if exptime else 0.0
 
-    # -- noise -----------------------------------------------------------------
-    if adapter.combine_backend == "jwst_image3":
+
+def _noise(ctx: _StageContext, sci, wht, exptime: float) -> np.ndarray:
+    drizzle_prov = ctx.record["drizzle"]
+    if ctx.adapter.combine_backend == "jwst_image3":
+        from astropy.io import fits
+
         from .noise import jwst_rms as jwst_rms_mod
 
         err = fits.getdata(drizzle_prov["err_path"]).astype(float)
@@ -127,7 +136,7 @@ def reduce_target(
             sci,
             correlated_noise_factor=drizzle_prov["correlated_noise_factor"],
         )
-        record["noise"] = {
+        ctx.record["noise"] = {
             "recipe": "R * ERR (propagated by calwebb_image3 resample)",
             "correlated_noise_factor": drizzle_prov["correlated_noise_factor"],
             "exptime": float(exptime),
@@ -140,7 +149,7 @@ def reduce_target(
             exptime=float(exptime),
             correlated_noise_factor=drizzle_prov["correlated_noise_factor"],
         )
-        record["noise"] = {
+        ctx.record["noise"] = {
             "recipe": "R * sqrt(max(sci,0)/exptime + 1/wht)",
             "correlated_noise_factor": drizzle_prov["correlated_noise_factor"],
             "exptime": float(exptime),
@@ -148,10 +157,14 @@ def reduce_target(
                 sci[np.isfinite(noise)]
             ),
         }
+    return noise
 
-    # -- psf -------------------------------------------------------------------
+
+def _psf(ctx: _StageContext, sci, header):
+    from astropy.io import fits
     from astropy.wcs import WCS
 
+    spec, adapter = ctx.spec, ctx.adapter
     target_xy = WCS(header).world_to_pixel_values(spec.ra, spec.dec)
     selection = stars_mod.StarSelection()
     if adapter.observatory == "hst":
@@ -160,7 +173,7 @@ def reduce_target(
         # full well by the longest single-exposure time — never the mosaic
         # total.
         max_single_exptime = max(
-            float(fits.getheader(p).get("EXPTIME", 0.0)) for p in exposures
+            float(fits.getheader(p).get("EXPTIME", 0.0)) for p in ctx.exposures
         )
         if max_single_exptime <= 0.0:
             raise ValueError("no exposure carries a positive EXPTIME header")
@@ -184,9 +197,14 @@ def reduce_target(
     psf, psf_full, psf_diag = epsf_mod.build_epsf(
         sci, stars, spec.psf_shape, spec.psf_full_shape
     )
-    record["psf"] = psf_diag
+    ctx.record["psf"] = psf_diag
+    return psf, psf_full
 
-    # -- package ----------------------------------------------------------------
+
+def _package(ctx: _StageContext, sci, header, wht, noise, psf, psf_full) -> None:
+    from astropy.io import fits
+
+    spec, out_dir = ctx.spec, ctx.out_dir
     data_cut, data_header, center_xy = cutout_mod.make_cutout(
         sci, header, spec.ra, spec.dec, spec.cutout_shape
     )
@@ -205,16 +223,16 @@ def reduce_target(
     rms_mod.assert_finite_within(noise_cut, f"{spec.name} cutout")
     cutout_mod.write_fits(data_cut, data_header, out_dir / "data.fits")
     cutout_mod.write_fits(noise_cut, noise_header, out_dir / "noise_map.fits")
-    record["bad_pixel_policy"] = mask_diag
+    ctx.record["bad_pixel_policy"] = mask_diag
 
     # The mosaic-wide WHT uniformity mixes coverage tiers across the full
     # union footprint; the science verdict belongs to the cutout region.
-    from .drizzle.diagnostics import check_weight_uniformity
-
     wht_cut, _, _ = cutout_mod.make_cutout(
         wht, header, spec.ra, spec.dec, spec.cutout_shape
     )
-    record["drizzle"]["weight_uniformity_cutout"] = check_weight_uniformity(wht_cut)
+    ctx.record["drizzle"]["weight_uniformity_cutout"] = check_weight_uniformity(
+        wht_cut
+    )
 
     fits.PrimaryHDU(psf.astype(np.float32)).writeto(
         out_dir / "psf.fits", overwrite=True
@@ -222,7 +240,7 @@ def reduce_target(
     fits.PrimaryHDU(psf_full.astype(np.float32)).writeto(
         out_dir / "psf_full.fits", overwrite=True
     )
-    record["package"] = {
+    ctx.record["package"] = {
         "products": ["data.fits", "noise_map.fits", "psf.fits", "psf_full.fits"],
         "cutout_shape": list(spec.cutout_shape),
         "pixel_scale": spec.final_scale,
@@ -230,12 +248,45 @@ def reduce_target(
         "data_units": str(header.get("BUNIT", "unknown")),
     }
 
-    provenance_mod.write_reduction_json(out_dir, record)
 
-    # -- evict --------------------------------------------------------------------
-    cache.mark_completed(spec.name)
+def _evict(ctx: _StageContext, evict_when_done: bool) -> None:
+    ctx.cache.mark_completed(ctx.spec.name)
     if evict_when_done:
-        cache.evict(spec.name)
-    cache.enforce_cap()
+        ctx.cache.evict(ctx.spec.name)
+    ctx.cache.enforce_cap()
 
-    return record
+
+def reduce_target(
+    spec: TargetSpec,
+    cache_root: Path,
+    output_root: Path,
+    size_cap_bytes: Optional[int] = None,
+    evict_when_done: bool = False,
+) -> Dict:
+    """Run the full pipeline for one target; returns the provenance record."""
+    adapter = instruments.get(spec.instrument)
+    cache = cache_mod.ExposureCache(Path(cache_root), size_cap_bytes=size_cap_bytes)
+    out_dir = Path(output_root) / spec.name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    work_dir = out_dir / "work"
+    work_dir.mkdir(exist_ok=True)
+
+    ctx = _StageContext(
+        spec=spec,
+        adapter=adapter,
+        cache=cache,
+        out_dir=out_dir,
+        work_dir=work_dir,
+        record={"target": spec.as_dict(), "instrument": adapter.key},
+    )
+
+    _acquire(ctx)
+    _align(ctx)
+    sci, header, wht, exptime = _combine(ctx)
+    noise = _noise(ctx, sci, wht, exptime)
+    psf, psf_full = _psf(ctx, sci, header)
+    _package(ctx, sci, header, wht, noise, psf, psf_full)
+    provenance_mod.write_reduction_json(out_dir, ctx.record)
+    _evict(ctx, evict_when_done)
+
+    return ctx.record

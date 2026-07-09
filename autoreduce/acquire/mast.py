@@ -56,7 +56,7 @@ def query_exposures(
     obs = Observations.query_criteria(
         coordinates=coord,
         radius=radius,
-        obs_collection="HST",
+        obs_collection=adapter.mast_obs_collection,
         instrument_name=adapter.mast_instrument_name,
         filters=filter_name,
         dataproduct_type="image",

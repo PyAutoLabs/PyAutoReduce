@@ -15,26 +15,28 @@ from typing import List
 
 from ..instruments import InstrumentAdapter
 
-CRDS_SERVER_URL = "https://hst-crds.stsci.edu"
-
 
 def configure_environment(references_root: Path, adapter: InstrumentAdapter) -> dict:
     """
-    Set the CRDS variables for this process. Must run before drizzlepac is
-    imported anywhere in the process. Returns the mapping applied.
+    Set the CRDS variables for this process. Must run before drizzlepac /
+    the jwst pipeline are imported anywhere in the process. Returns the
+    mapping applied.
 
     Deliberately overrides any inherited CRDS_PATH/jref: the pipeline is a
     pure function of the target spec plus the archive, so its reference files
     live in *its* cache, not wherever the shell environment happens to point.
+    The server URL is the adapter's (hst-crds vs jwst-crds).
     """
     env = {
-        "CRDS_SERVER_URL": CRDS_SERVER_URL,
+        "CRDS_SERVER_URL": adapter.crds_server_url,
         "CRDS_PATH": str(references_root),
-        adapter.reference_env_key: str(
-            Path(references_root) / adapter.crds_reference_subpath
-        )
-        + "/",
     }
+    # HST-style tools resolve references through an iraf-style variable
+    # (jref$/iref$); the jwst pipeline reads CRDS_PATH directly.
+    if adapter.reference_env_key != "CRDS_PATH":
+        env[adapter.reference_env_key] = (
+            str(Path(references_root) / adapter.crds_reference_subpath) + "/"
+        )
     os.environ.update(env)
     return env
 

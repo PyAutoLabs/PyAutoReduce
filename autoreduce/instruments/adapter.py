@@ -24,6 +24,12 @@ class InstrumentAdapter:
     # The adapter's recommendation for TargetSpec.final_scale (which remains
     # the user-facing dial); documents sensible sampling for this detector.
     recommended_final_scale: float = 0.05
+    # Observatory-level routing (phase 3): which archive/CRDS ecosystem and
+    # which combination backend this instrument reduces through.
+    observatory: str = "hst"  # "hst" | "jwst"
+    crds_server_url: str = "https://hst-crds.stsci.edu"
+    combine_backend: str = "astrodrizzle"  # "astrodrizzle" | "jwst_image3"
+    mast_obs_collection: str = "HST"
 
     def scale_ratio(self, final_scale: float) -> float:
         """s = output scale / native scale, as used by the Casertano factor."""

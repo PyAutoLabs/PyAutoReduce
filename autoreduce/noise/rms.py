@@ -77,6 +77,75 @@ def assert_finite_within(noise_map: np.ndarray, region_name: str) -> None:
         )
 
 
+# Masked-by-noise convention: bad pixels carry effectively infinite noise so
+# any chi^2 ignores them — the same treatment the legacy noise-scaled
+# datasets use for artifacts and contaminants.
+MASKED_NOISE_VALUE = 1.0e8
+
+
+def mask_isolated_bad_pixels(
+    data_cut: np.ndarray,
+    noise_cut: np.ndarray,
+    center_xy,
+    pixel_scale: float,
+    max_bad_fraction: float = 0.005,
+    protect_radius_arcsec: float = 1.5,
+    region_name: str = "cutout",
+):
+    """
+    Apply the bad-pixel policy to a cutout pair.
+
+    Isolated non-finite/non-positive noise pixels (fully-rejected or dead
+    pixels — routine in deep resampled stacks) are set to `MASKED_NOISE_VALUE`
+    with the data zeroed, and the count/positions are returned for provenance.
+    The failure stays loud where it matters: more than `max_bad_fraction` of
+    the cutout bad, or any bad pixel within `protect_radius_arcsec` of the
+    target centre (the lens itself must be clean).
+    """
+    bad = ~np.isfinite(noise_cut) | (noise_cut <= 0.0)
+    n_bad = int(bad.sum())
+    if n_bad == 0:
+        return data_cut, noise_cut, {"n_masked_pixels": 0}
+
+    # "Isolated" is enforced: a bad pixel with two or more bad 4-neighbours
+    # marks a structured defect (blob/column), which must fail loudly — only
+    # scattered singletons and pairs are maskable.
+    neighbours = sum(
+        np.roll(bad, shift, axis) for shift, axis in ((1, 0), (-1, 0), (1, 1), (-1, 1))
+    )
+    if (bad & (neighbours >= 2)).any():
+        raise ValueError(
+            f"structured bad-pixel region in {region_name} ({n_bad} bad px with "
+            f"contiguous clustering) — fix the reduction, don't mask a defect"
+        )
+
+    fraction = n_bad / bad.size
+    if fraction > max_bad_fraction:
+        raise ValueError(
+            f"{n_bad} bad noise pixels ({fraction:.2%}) in {region_name} exceed "
+            f"the {max_bad_fraction:.2%} policy limit — fix the reduction "
+            f"(coverage, weights), don't mask wholesale"
+        )
+    ys, xs = np.where(bad)
+    cx, cy = center_xy
+    r_arcsec = np.hypot(ys - cy, xs - cx) * pixel_scale
+    if (r_arcsec < protect_radius_arcsec).any():
+        raise ValueError(
+            f"bad noise pixel within {protect_radius_arcsec}\" of the target "
+            f"centre in {region_name} — the lens region must reduce cleanly"
+        )
+
+    data_out = np.where(bad, 0.0, data_cut)
+    noise_out = np.where(bad, MASKED_NOISE_VALUE, noise_cut)
+    diagnostics = {
+        "n_masked_pixels": n_bad,
+        "masked_fraction": fraction,
+        "masked_noise_value": MASKED_NOISE_VALUE,
+        "min_masked_radius_arcsec": float(r_arcsec.min()),
+    }
+    return data_out, noise_out, diagnostics
+
+
 def empirical_background_rms(sci: np.ndarray, n_sigma: float = 3.0) -> float:
     """Sigma-clipped RMS of the mosaic — the blank-sky validation check."""
     from astropy.stats import sigma_clipped_stats

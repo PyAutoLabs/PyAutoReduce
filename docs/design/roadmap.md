@@ -22,16 +22,13 @@ adapter #1; nothing outside `instruments/` may mention a detector by name.
 - Other ACS/WFC3 filters (F435W, F606W…) are config, not code: the adapter
   already parameterizes the filter-dependent pieces.
 
-## JWST (NIRCam first)
+## JWST (NIRCam first) — **in progress (phase 3, PyAutoReduce#6)**
 
-- Adapter over the STScI `jwst` pipeline: `_cal` products from stage 2
-  (`calwebb_image2`), combination via stage 3 (`calwebb_image3`) whose
-  `resample` step is the drizzle analogue — same defaults-first principle.
-- Noise: JWST products carry `ERR`/`VAR_POISSON`/`VAR_RNOISE` arrays, so
-  stage 4 becomes a *read + resample-consistency check* rather than a
-  construction — a good test of the stage abstraction.
-- PSF: STPSF (formerly WebbPSF) replaces TinyTim in tier 2; tiers 1 and 3
-  carry over unchanged.
+- Design deltas live in [`jwst.md`](jwst.md); adapters `nircam_sw`/`nircam_lw`
+  + the combine-backend dispatch (`astrodrizzle` | `jwst_image3`) implemented;
+  noise = read propagated ERR × R; validated on the COSMOS-Web ring, four
+  bands, against the autolens_assistant demo dataset.
+- PSF: STPSF tier-2 back-end still open (tier-1 ePSF carries over).
 
 ## Per-exposure frame products (`_flt`/`_flc` with cosmic rays)
 

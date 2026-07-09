@@ -109,3 +109,62 @@ def test_empirical_background_rms_recovers_sigma():
     rng = np.random.default_rng(0)
     sci = rng.normal(0.0, 0.02, size=(200, 200))
     assert empirical_background_rms(sci) == pytest.approx(0.02, rel=0.05)
+
+
+class TestBadPixelPolicy:
+    def _pair(self):
+        data = np.ones((100, 100))
+        noise = np.full((100, 100), 0.01)
+        return data, noise
+
+    def test_clean_cutout_untouched(self):
+        from autoreduce.noise.rms import mask_isolated_bad_pixels
+
+        data, noise = self._pair()
+        d, n, diag = mask_isolated_bad_pixels(data, noise, (50.0, 50.0), 0.06)
+        assert diag["n_masked_pixels"] == 0
+        assert (n == 0.01).all()
+
+    def test_isolated_far_pixel_masked_and_recorded(self):
+        from autoreduce.noise.rms import MASKED_NOISE_VALUE, mask_isolated_bad_pixels
+
+        data, noise = self._pair()
+        noise[5, 5] = np.nan
+        d, n, diag = mask_isolated_bad_pixels(data, noise, (50.0, 50.0), 0.06)
+        assert diag["n_masked_pixels"] == 1
+        assert n[5, 5] == MASKED_NOISE_VALUE and d[5, 5] == 0.0
+        assert n[0, 0] == 0.01  # rest untouched
+
+    def test_too_many_bad_pixels_is_loud(self):
+        from autoreduce.noise.rms import mask_isolated_bad_pixels
+
+        data, noise = self._pair()
+        # 100 isolated singletons on a grid: 1% > 0.5%, no clustering.
+        noise[::10, ::10] = 0.0
+        with pytest.raises(ValueError, match="policy limit"):
+            mask_isolated_bad_pixels(data, noise, (50.0, 50.0), 0.06)
+
+    def test_bad_pixel_near_lens_is_loud(self):
+        from autoreduce.noise.rms import mask_isolated_bad_pixels
+
+        data, noise = self._pair()
+        noise[51, 52] = np.nan  # ~0.13" from centre at 0.06"/pix
+        with pytest.raises(ValueError, match="lens region"):
+            mask_isolated_bad_pixels(data, noise, (50.0, 50.0), 0.06)
+
+    def test_structured_cluster_is_loud_even_when_small(self):
+        from autoreduce.noise.rms import mask_isolated_bad_pixels
+
+        data, noise = self._pair()
+        noise[10:13, 10:13] = np.nan  # 3x3 blob: 9 px = 0.09%, but structured
+        with pytest.raises(ValueError, match="structured"):
+            mask_isolated_bad_pixels(data, noise, (50.0, 50.0), 0.06)
+
+    def test_scattered_pair_still_maskable(self):
+        from autoreduce.noise.rms import mask_isolated_bad_pixels
+
+        data, noise = self._pair()
+        noise[10, 10] = np.nan
+        noise[10, 11] = np.nan  # a pair: each has one bad neighbour
+        d, n, diag = mask_isolated_bad_pixels(data, noise, (50.0, 50.0), 0.06)
+        assert diag["n_masked_pixels"] == 2

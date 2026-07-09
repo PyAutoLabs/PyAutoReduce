@@ -64,12 +64,20 @@ def build_epsf(
         size += 1
     stars = extract_stars(NDData(sci), positions, size=size)
 
-    # extract_stars drops stars whose window overruns the mosaic edge, so the
-    # minimum-star contract must be re-checked on what actually survived.
+    # Reject stars whose window contains non-finite pixels (coverage edges,
+    # DQ holes — routine in JWST mosaics): EPSFBuilder's fitter refuses NaN.
+    from photutils.psf import EPSFStars
+
+    stars = EPSFStars([s for s in stars.all_stars if np.isfinite(s.data).all()])
+
+    # extract_stars drops stars whose window overruns the mosaic edge and the
+    # finite cut above drops more, so the minimum-star contract must be
+    # re-checked on what actually survived.
     if len(stars) < MIN_STARS:
         raise InsufficientStarsError(
-            f"{len(stars)} stars survived cutout extraction (< {MIN_STARS}); "
-            f"tier 1 ePSF is not viable — select tier 2 (model PSF) explicitly"
+            f"{len(stars)} stars survived cutout extraction + finite-window "
+            f"cut (< {MIN_STARS}); tier 1 ePSF is not viable — select tier 2 "
+            f"(model PSF) explicitly"
         )
 
     builder = EPSFBuilder(oversampling=oversampling, maxiters=10, progress_bar=False)

@@ -65,9 +65,8 @@ cosmic-ray masks and the WCS manifest; design in `hst_acs_pipeline.md`
 - **JWST analogue** — whether/what to emit pre-`calwebb_image3` is a
   research task (PyAutoMind
   `research/pyautoreduce/jwst_individual_frame_feasibility.md`).
-- **deepCR UVIS model** — swap in the Chen et al. (2024) label-free
-  WFC3/UVIS retrain when packaged upstream; per-adapter `dq_bad_bits`
-  refinement of the any-nonzero-bit masking policy.
+- **Per-adapter `dq_bad_bits`** — refinement of the any-nonzero-bit masking
+  policy, if a consumer ever needs to keep e.g. warm-pixel bits.
 
 ## Other instruments / surveys
 

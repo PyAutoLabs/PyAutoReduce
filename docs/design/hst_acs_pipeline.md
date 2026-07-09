@@ -290,10 +290,10 @@ Design decisions:
   when several exposures overlap; per-frame modeling needs a mask for every
   frame on its own, single-exposure visits included. deepCR (Zhang & Bloom
   2020) detects CRs on individual exposures; ACS/WFC uses the published
-  model, WFC3/UVIS reuses it as the nearest CCD model until the Chen et al.
-  (2024) label-free UVIS retrain is packaged upstream (the manifest records
-  the exact model + threshold, so datasets remain re-maskable). WFC3/IR
-  skips deepCR — calwf3 up-the-ramp fitting already flags IR CRs in DQ.
+  `ACS-WFC` model and WFC3/UVIS the `WFC3-UVIS` label-free retrain (Chen et
+  al. 2024), both shipped in deepCR >= 0.3 (the manifest records the exact
+  model + threshold, so datasets remain re-maskable). WFC3/IR skips deepCR
+  — calwf3 up-the-ramp fitting already flags IR CRs in DQ.
   Mask-only by contract: deepCR inpainting is never used — bad pixels are
   masked, never fabricated. Optional dependency: `autoreduce[frames]`.
 - **Masking policy** — any nonzero DQ bit, deepCR CR pixel, off-chip or

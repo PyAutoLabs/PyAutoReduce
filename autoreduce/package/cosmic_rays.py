@@ -17,15 +17,14 @@ from typing import Callable, Dict
 
 import numpy as np
 
-# deepCR ships instrument-specific learned models; ACS/WFC is the published
-# baseline (Zhang & Bloom 2020). WFC3/UVIS reuses it as the nearest CCD
-# model until the Chen et al. (2024) label-free UVIS retrain is packaged
-# upstream — the manifest records the exact model, so datasets remain
-# re-maskable when it lands. WFC3/IR is absent deliberately: calwf3
-# up-the-ramp fitting already flags IR cosmic rays in DQ.
+# deepCR ships instrument-specific learned models (names are the deepCR>=0.3
+# registry keys): ACS/WFC is the published baseline (Zhang & Bloom 2020);
+# WFC3/UVIS is the label-free retrain (Chen et al. 2024). The manifest
+# records the exact model, so datasets remain re-maskable. WFC3/IR is absent
+# deliberately: calwf3 up-the-ramp fitting already flags IR cosmic rays in DQ.
 DEEPCR_MODELS: Dict[str, str] = {
-    "acs_wfc": "ACS-WFC-F606W-2-32",
-    "wfc3_uvis": "ACS-WFC-F606W-2-32",
+    "acs_wfc": "ACS-WFC",
+    "wfc3_uvis": "WFC3-UVIS",
 }
 
 # Published default operating point (Zhang & Bloom 2020).

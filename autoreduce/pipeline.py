@@ -599,6 +599,20 @@ def reduce_target(
     work_dir = out_dir / "work"
     work_dir.mkdir(exist_ok=True)
 
+    if getattr(adapter, "domain", "imaging") == "visibility":
+        # The visibility branch (docs/design/alma.md): its own stages, the
+        # shared cache/provenance machinery, the same eviction contract.
+        from .visibilities import pipeline as visibility_pipeline
+
+        record = visibility_pipeline.reduce_visibility_target(
+            spec, adapter, cache, out_dir, work_dir
+        )
+        cache.mark_completed(spec.name)
+        if evict_when_done:
+            cache.evict(spec.name)
+        cache.enforce_cap()
+        return record
+
     ctx = _StageContext(
         spec=spec,
         adapter=adapter,

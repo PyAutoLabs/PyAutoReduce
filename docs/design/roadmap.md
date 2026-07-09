@@ -41,6 +41,18 @@ adapter #1; nothing outside `instruments/` may mention a detector by name.
 - Open: wide-camera distortion, subarrays, MULTISAM read noise, north-up
   resampling (see keck_ao.md open items).
 
+## ALMA interferometry — **in progress (phase 5, PyAutoReduce#14)**
+
+- Design lives in [`alma.md`](alma.md); the first visibility-domain product
+  family: calibrated measurement sets → the `al.Interferometer.from_fits`
+  triplet (visibilities / uv_wavelengths / noise_map, `(Nvis, 2)`), via the
+  visibility branch acquire → split → extract → assemble → package.
+- Headless modular CASA (`casatools`/`casatasks`) replaces the interactive
+  `casa` shell; grounded in an active ALMA modeler's continuum recipe;
+  validation anchor 2016.1.00282.S / G09v1.40.
+- Open: scriptForPI restore automation, emission-line/cube extraction
+  (reduction side of the shipped `alma-datacube` modelling work).
+
 ## Per-exposure frame products (`_flt`/`_flc` with cosmic rays)
 
 For multi-frame forward modeling (fitting N undrizzled exposures

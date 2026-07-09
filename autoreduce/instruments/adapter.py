@@ -12,6 +12,12 @@ from typing import Dict, Tuple
 class InstrumentAdapter:
     """Static description of one instrument/detector reduction path."""
 
+    # Product domain: imaging adapters feed the image pipeline
+    # (acquire→align→drizzle→noise→psf→package); visibility adapters feed
+    # the visibility branch (docs/design/alma.md). The orchestrator
+    # dispatches on this and nothing else.
+    domain = "imaging"
+
     key: str  # registry key, e.g. "acs_wfc"
     mast_instrument_name: str  # e.g. "ACS/WFC" as MAST spells it
     native_scale: float  # arcsec / pix
@@ -53,6 +59,23 @@ class InstrumentAdapter:
     def scale_ratio(self, final_scale: float) -> float:
         """s = output scale / native scale, as used by the Casertano factor."""
         return final_scale / self.native_scale
+
+
+@dataclass(frozen=True)
+class VisibilityInstrumentAdapter:
+    """
+    Static description of one visibility-domain (interferometer) reduction
+    path (docs/design/alma.md). Deliberately not a subclass of
+    `InstrumentAdapter`: the imaging fields (drizzle kwargs, saturation,
+    CRDS routing) have no visibility meaning, and a shared registry plus the
+    `domain` dispatch is the whole contract between the two families.
+    """
+
+    domain = "visibility"
+
+    key: str  # registry key, e.g. "alma"
+    observatory: str  # "alma"
+    archive: str  # which archive the acquire stage queries, e.g. "alma"
 
 
 _REGISTRY: Dict[str, InstrumentAdapter] = {}

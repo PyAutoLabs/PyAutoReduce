@@ -43,6 +43,26 @@ class TargetSpec:
     # Alignment: residual (pixels) above which TweakReg refinement triggers.
     alignment_tolerance_pix: float = 0.1
 
+    # Visibility-domain (ALMA) additions — ignored by imaging instruments,
+    # required by the visibility branch (docs/design/alma.md). The imaging
+    # dials above (cutout, drizzle, psf shapes) are ignored in return.
+    # Execution-block uids pinning the measurement sets, e.g.
+    # ("A002_Xb9b1b9_X3046",).
+    alma_uids: Optional[Tuple[str, ...]] = None
+    # The science field name inside the MS, e.g. "G09v1.40".
+    alma_field: Optional[str] = None
+    # Spectral windows to extract, e.g. ("1", "2") — line-bearing spws are
+    # simply left out for continuum work.
+    alma_spws: Optional[Tuple[str, ...]] = None
+    # Channel-averaging width; 0 = collapse each spw fully (the continuum
+    # default).
+    alma_width: int = 0
+    # Directory of calibrated per-uid MS (uid___<uid>.ms.split.cal) from an
+    # ARC delivery / scriptForPI restore; None = acquire from the archive.
+    alma_ms_dir: Optional[str] = None
+    # ALMA project code for archive acquisition, e.g. "2016.1.00282.S".
+    alma_project_code: Optional[str] = None
+
     # Ground-based (KOA) additions — ignored by space-based instruments.
     # Explicit KOA identifiers pin the science frame set exactly (the raw
     # archive has no association tables); None = query by coords + program.
@@ -61,6 +81,10 @@ class TargetSpec:
             raise ValueError(f"dec out of range: {self.dec}")
         if not 0.0 < self.final_pixfrac <= 1.0:
             raise ValueError(f"final_pixfrac must be in (0, 1]: {self.final_pixfrac}")
+        if self.alma_width < 0:
+            raise ValueError(
+                f"alma_width must be >= 0 (0 = collapse the spw): {self.alma_width}"
+            )
         for shape_name in ("cutout_shape", "psf_shape", "psf_full_shape"):
             shape = getattr(self, shape_name)
             if len(shape) != 2 or any(s < 1 for s in shape):
@@ -79,7 +103,13 @@ class TargetSpec:
         for key in ("cutout_shape", "psf_shape", "psf_full_shape"):
             if key in raw:
                 raw[key] = tuple(raw[key])
-        for key in ("proposal_ids", "koa_science_ids", "koa_psf_star_ids"):
+        for key in (
+            "proposal_ids",
+            "koa_science_ids",
+            "koa_psf_star_ids",
+            "alma_uids",
+            "alma_spws",
+        ):
             if raw.get(key) is not None:
                 raw[key] = tuple(str(p) for p in raw[key])
         return cls(**raw)

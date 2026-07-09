@@ -577,11 +577,11 @@ def _package(ctx: _StageContext, sci, header, wht, noise, psf, psf_full) -> None
     }
 
 
-def _evict(ctx: _StageContext, evict_when_done: bool) -> None:
-    ctx.cache.mark_completed(ctx.spec.name)
+def _evict(cache: cache_mod.ExposureCache, name: str, evict_when_done: bool) -> None:
+    cache.mark_completed(name)
     if evict_when_done:
-        ctx.cache.evict(ctx.spec.name)
-    ctx.cache.enforce_cap()
+        cache.evict(name)
+    cache.enforce_cap()
 
 
 def reduce_target(
@@ -598,6 +598,21 @@ def reduce_target(
     out_dir.mkdir(parents=True, exist_ok=True)
     work_dir = out_dir / "work"
     work_dir.mkdir(exist_ok=True)
+
+    if adapter.domain == "visibility":
+        # The visibility branch (docs/design/alma.md): its own stages, the
+        # shared cache/provenance machinery, the same eviction contract.
+        from .visibilities import pipeline as visibility_pipeline
+
+        record = visibility_pipeline.reduce_visibility_target(
+            spec, adapter, cache, out_dir, work_dir
+        )
+        # The cache lifecycle applies only when acquisition went through the
+        # cache — a local alma_ms_dir reduction never creates a manifest
+        # entry, and mark_completed on a missing entry is (rightly) loud.
+        if record["acquire"]["source"] == "alma-archive":
+            _evict(cache, spec.name, evict_when_done)
+        return record
 
     ctx = _StageContext(
         spec=spec,
@@ -616,6 +631,6 @@ def reduce_target(
     psf, psf_full = _psf(ctx, sci, header)
     _package(ctx, sci, header, wht, noise, psf, psf_full)
     provenance_mod.write_reduction_json(out_dir, ctx.record)
-    _evict(ctx, evict_when_done)
+    _evict(ctx.cache, ctx.spec.name, evict_when_done)
 
     return ctx.record

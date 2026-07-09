@@ -5,12 +5,18 @@ instrument-specific lives behind an `InstrumentAdapter`; no module outside
 """
 
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Union
 
 
 @dataclass(frozen=True)
 class InstrumentAdapter:
     """Static description of one instrument/detector reduction path."""
+
+    # Product domain: imaging adapters feed the image pipeline
+    # (acquire→align→drizzle→noise→psf→package); visibility adapters feed
+    # the visibility branch (docs/design/alma.md). The orchestrator
+    # dispatches on this and nothing else.
+    domain = "imaging"
 
     key: str  # registry key, e.g. "acs_wfc"
     mast_instrument_name: str  # e.g. "ACS/WFC" as MAST spells it
@@ -55,17 +61,38 @@ class InstrumentAdapter:
         return final_scale / self.native_scale
 
 
-_REGISTRY: Dict[str, InstrumentAdapter] = {}
+@dataclass(frozen=True)
+class VisibilityInstrumentAdapter:
+    """
+    Static description of one visibility-domain (interferometer) reduction
+    path (docs/design/alma.md). Deliberately not a subclass of
+    `InstrumentAdapter`: the imaging fields (drizzle kwargs, saturation,
+    CRDS routing) have no visibility meaning, and a shared registry plus the
+    `domain` dispatch is the whole contract between the two families.
+    """
+
+    domain = "visibility"
+
+    key: str  # registry key, e.g. "alma"
+    observatory: str  # "alma"
+    archive: str  # which archive the acquire stage queries, e.g. "alma"
 
 
-def register(adapter: InstrumentAdapter) -> InstrumentAdapter:
+# The shared registry stores both families; consumers dispatch on `.domain`
+# before touching family-specific fields.
+AnyAdapter = Union[InstrumentAdapter, VisibilityInstrumentAdapter]
+
+_REGISTRY: Dict[str, AnyAdapter] = {}
+
+
+def register(adapter: AnyAdapter) -> AnyAdapter:
     if adapter.key in _REGISTRY:
         raise ValueError(f"instrument adapter already registered: {adapter.key}")
     _REGISTRY[adapter.key] = adapter
     return adapter
 
 
-def get(key: str) -> InstrumentAdapter:
+def get(key: str) -> AnyAdapter:
     try:
         return _REGISTRY[key]
     except KeyError:

@@ -201,6 +201,15 @@ def reduce_target(
     cutout_mod.write_fits(noise_cut, noise_header, out_dir / "noise_map.fits")
     record["bad_pixel_policy"] = mask_diag
 
+    # The mosaic-wide WHT uniformity mixes coverage tiers across the full
+    # union footprint; the science verdict belongs to the cutout region.
+    from .drizzle.diagnostics import check_weight_uniformity
+
+    wht_cut, _, _ = cutout_mod.make_cutout(
+        wht, header, spec.ra, spec.dec, spec.cutout_shape
+    )
+    record["drizzle"]["weight_uniformity_cutout"] = check_weight_uniformity(wht_cut)
+
     fits.PrimaryHDU(psf.astype(np.float32)).writeto(
         out_dir / "psf.fits", overwrite=True
     )

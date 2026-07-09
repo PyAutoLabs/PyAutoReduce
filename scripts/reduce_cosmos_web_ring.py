@@ -127,6 +127,7 @@ def main():
         summary = {
             "n_exposures": record["acquire"]["n_exposures"],
             "weight_uniformity": record["drizzle"]["weight_uniformity"],
+            "weight_uniformity_cutout": record["drizzle"].get("weight_uniformity_cutout"),
             "correlated_noise_factor": record["noise"]["correlated_noise_factor"],
             "sky_over_err_floor": record["noise"].get("sky_over_err_floor"),
             "psf": record["psf"],

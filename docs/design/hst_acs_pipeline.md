@@ -249,6 +249,22 @@ Also confirmed: tier-1 ePSF is plausible for this field (236 point-like
 >10σ detections mosaic-wide, pre-selection), and CRDS reference-file sync +
 HAP-skycell query filtering belong to the acquire stage (see above).
 
+**Addendum 2026-07-09 (post HAP-dedupe + usability screen)** — the numbers
+above were measured on mosaics that drizzled every exposure **twice** (the
+HAP visit-level duplicate-ingestion bug found by the frame-products
+validation; a failed 0-second exposure was also being ingested). Doubled IVM
+weights suppress the computed noise by √2, which propagates through every
+noise row above. Re-measured on the corrected 3-exposure mosaic:
+data ratio **0.959** (the flux deficit shrinks to ~4%), noise ratio
+**1.309** (previous 0.925 × √2). The corrected map is internally consistent
+— blank-sky map/empirical-RMS = 1.45 vs applied R = 1.36 — so stage 4's
+recipe stands. The flipped implication is about the *legacy* maps: with the
+√2 artifact removed, legacy noise sits ≈ our **uncorrected** IVM noise,
+i.e. the legacy maps do **not** appear to carry the correlated-noise
+correction after all, and our chi²-faithful maps are ~30% above legacy by
+design. Formal re-baseline of the acceptance comparison is tracked in
+PyAutoMind (`research/pyautoreduce/acceptance_noise_rebaseline.md`).
+
 ## Per-exposure frame products (opt-in packaging mode)
 
 `TargetSpec.frame_products: bool = False` — when on, the pipeline additionally

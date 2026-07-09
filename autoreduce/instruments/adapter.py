@@ -20,7 +20,10 @@ class InstrumentAdapter:
     crds_reference_subpath: str  # where CRDS syncs this instrument's files
     supports_cte_correction: bool
     default_drizzle_kwargs: Dict[str, object]
-    saturation_dn: float  # conservative full-well / saturation level
+    saturation_dn: float  # conservative full-well / saturation level, electrons
+    # The adapter's recommendation for TargetSpec.final_scale (which remains
+    # the user-facing dial); documents sensible sampling for this detector.
+    recommended_final_scale: float = 0.05
 
     def scale_ratio(self, final_scale: float) -> float:
         """s = output scale / native scale, as used by the Casertano factor."""

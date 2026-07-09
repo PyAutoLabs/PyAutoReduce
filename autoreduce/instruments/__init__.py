@@ -7,3 +7,5 @@ the first adapter; WFC3 and JWST follow (see ``docs/design/roadmap.md``).
 
 from .adapter import InstrumentAdapter, get, register, registered_keys
 from .acs_wfc import ACS_WFC
+from .wfc3_uvis import WFC3_UVIS
+from .wfc3_ir import WFC3_IR

@@ -40,6 +40,12 @@ class TargetSpec:
     psf_shape: Tuple[int, int] = (21, 21)
     psf_full_shape: Tuple[int, int] = (61, 61)
 
+    # Opt-in per-exposure frame products (roadmap "Per-exposure frame
+    # products"): additionally package every calibrated _flc/_flt chip as a
+    # modeling-ready native-pixel product set under <out>/frames/. HST-only;
+    # off by default — deepCR per-frame cosmic-ray masking is slow.
+    frame_products: bool = False
+
     # Alignment: residual (pixels) above which TweakReg refinement triggers.
     alignment_tolerance_pix: float = 0.1
 

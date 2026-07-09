@@ -25,6 +25,7 @@ from .drizzle.diagnostics import check_weight_uniformity
 from .instruments import InstrumentAdapter
 from .noise import rms as rms_mod
 from .package import cutout as cutout_mod
+from .package import frames as frames_mod
 from .package import provenance as provenance_mod
 from .psf import epsf as epsf_mod
 from .psf import stars as stars_mod
@@ -577,6 +578,26 @@ def _package(ctx: _StageContext, sci, header, wht, noise, psf, psf_full) -> None
     }
 
 
+def _package_frames(ctx: _StageContext) -> None:
+    """
+    Opt-in per-exposure frame products (roadmap "Per-exposure frame
+    products") — a packaging mode over the already-calibrated exposures.
+    Runs after _package (driz_cr DQ flags and any tweakreg WCS refinement
+    exist by then) and before eviction can delete the cached frames.
+    """
+    if not ctx.spec.frame_products:
+        return
+    fragment = frames_mod.package_frame_products(
+        ctx.exposures,
+        ctx.spec,
+        ctx.adapter,
+        ctx.out_dir,
+        driz_cr_run=not ctx.record["drizzle"]["single_exposure_branch"],
+    )
+    ctx.record["frames"] = fragment
+    ctx.record["package"]["products"].append("frames/manifest.json")
+
+
 def _evict(cache: cache_mod.ExposureCache, name: str, evict_when_done: bool) -> None:
     cache.mark_completed(name)
     if evict_when_done:
@@ -593,6 +614,13 @@ def reduce_target(
 ) -> Dict:
     """Run the full pipeline for one target; returns the provenance record."""
     adapter = instruments.get(spec.instrument)
+    if spec.frame_products and getattr(adapter, "observatory", None) != "hst":
+        # Fail before any download: the JWST/ground analogues are open
+        # design questions (docs/design/roadmap.md, per-exposure frame
+        # products), not silently-skipped options.
+        raise ValueError(
+            f"frame_products is HST-only (instrument {spec.instrument!r})"
+        )
     cache = cache_mod.ExposureCache(Path(cache_root), size_cap_bytes=size_cap_bytes)
     out_dir = Path(output_root) / spec.name
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -630,6 +658,7 @@ def reduce_target(
     noise = _noise(ctx, sci, wht, exptime)
     psf, psf_full = _psf(ctx, sci, header)
     _package(ctx, sci, header, wht, noise, psf, psf_full)
+    _package_frames(ctx)
     provenance_mod.write_reduction_json(out_dir, ctx.record)
     _evict(ctx.cache, ctx.spec.name, evict_when_done)
 

@@ -249,8 +249,81 @@ Also confirmed: tier-1 ePSF is plausible for this field (236 point-like
 >10σ detections mosaic-wide, pre-selection), and CRDS reference-file sync +
 HAP-skycell query filtering belong to the acquire stage (see above).
 
+## Per-exposure frame products (opt-in packaging mode)
+
+`TargetSpec.frame_products: bool = False` — when on, the pipeline additionally
+packages every calibrated `_flc`/`_flt` SCI chip as a modeling-ready
+native-pixel product set, for fitting N undrizzled exposures simultaneously
+instead of one mosaic (roadmap "Per-exposure frame products"). A packaging
+mode over `autoreduce/package/frames.py`, run between the package stage and
+the provenance write (after driz_cr DQ flags and any TweakReg WCS refinement
+exist, before eviction can delete the cached frames); the mosaic path is
+untouched when the flag is off. HST-only: the flag on any other instrument
+fails fast — the JWST analogue is an open research task.
+
+Layout (uniform `_chip<EXTVER>`; the physical `CCDCHIP` is in the manifest):
+
+```
+output_root/<name>/frames/
+  manifest.json
+  <rootname>_chip1/{data.fits, noise_map.fits, dq.fits, cr_mask.fits}
+  <rootname>_chip2/{...}
+```
+
+Design decisions:
+
+- **Cutout geometry** — the native-pixel shape is derived from the existing
+  dials (`cutout_shape * final_scale / native_scale`, odd-forced): same sky
+  footprint as the mosaic cutout, no new user dial. Chip coverage is
+  re-tested per chip (the acquire footprint filter is per-exposure; ACS
+  chip 2 frequently misses the target and is skipped, recorded).
+- **Units** — SCI/ERR are converted to e-/s (`ELECTRONS / EXPTIME`; WFC3/IR
+  is already e-/s) so every frame and the mosaic share the cps flux scale.
+  Each SCI chip's `MDRIZSKY` is subtracted first: `globalmin+match` sky is
+  only *virtually* subtracted during drizzle, so the frames would otherwise
+  carry the sky pedestal the mosaic lacks.
+- **Noise** — the calacs/calwf3-propagated ERR extension (native-pixel
+  Poisson + read noise), unit-converted with SCI. No correlated-noise `R`:
+  nothing has been resampled.
+- **Cosmic rays (deepCR — documented deviation from STScI defaults)** —
+  `driz_cr` rejects CRs against a median stack, so its DQ flags exist only
+  when several exposures overlap; per-frame modeling needs a mask for every
+  frame on its own, single-exposure visits included. deepCR (Zhang & Bloom
+  2020) detects CRs on individual exposures; ACS/WFC uses the published
+  model, WFC3/UVIS reuses it as the nearest CCD model until the Chen et al.
+  (2024) label-free UVIS retrain is packaged upstream (the manifest records
+  the exact model + threshold, so datasets remain re-maskable). WFC3/IR
+  skips deepCR — calwf3 up-the-ramp fitting already flags IR CRs in DQ.
+  Mask-only by contract: deepCR inpainting is never used — bad pixels are
+  masked, never fabricated. Optional dependency: `autoreduce[frames]`.
+- **Masking policy** — any nonzero DQ bit, deepCR CR pixel, off-chip or
+  non-finite/non-positive-ERR pixel is masked-by-noise
+  (`noise = MASKED_NOISE_VALUE`, `data = 0`), so each frame's
+  `data.fits` + `noise_map.fits` load directly as an imaging dataset and
+  masked pixels drop out of any chi^2. The mosaic's isolated-bad-pixel
+  policy deliberately does **not** apply — its structured-defect rejection
+  would refuse exactly the CR trails this mode exists to capture. Raw
+  `dq.fits` (int32) and `cr_mask.fits` (uint8) keep the full bit
+  information for consumers wanting a different policy.
+- **WCS / registration** — each cutout header carries the frame's SIP WCS
+  (`to_header(relax=True)`); the NPOL/D2IM lookup-table distortion is not
+  FITS-serializable (~0.1 px residual), so the manifest records
+  `target_pixel` — the target projected through the *full* distortion model
+  — as the exact per-frame registration anchor. Frame-to-frame mapping is
+  `WCS_j^-1 ∘ WCS_i`; no bespoke transform format.
+- **Caveats recorded in the manifest** — single-exposure reductions carry no
+  driz_cr flags (`driz_cr_run: false` + note: the deepCR mask is then the
+  only CR rejection); re-runs clear `frames/` first so a smaller exposure
+  set leaves no orphan chip directories.
+
+**Follow-up (not in v1):** per-frame native-pixel PSFs (TinyTim / undrizzled
+ePSF) — the frames are not fully modeling-ready without them; tracked on the
+roadmap.
+
 ## Non-goals (phase 1)
 
-WFC3, other filters, JWST, per-exposure `_flt` products, and Euclid (owned by
+WFC3, other filters, JWST, and Euclid (owned by
 `euclid_strong_lens_modeling_pipeline`) — see `roadmap.md`. No GUI, no
-database; per-target YAML + filesystem outputs only.
+database; per-target YAML + filesystem outputs only. (Per-exposure
+`_flt`/`_flc` products, a phase-1 non-goal, shipped later as the opt-in
+packaging mode above.)

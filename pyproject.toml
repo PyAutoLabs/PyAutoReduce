@@ -54,6 +54,9 @@ hst = ["drizzlepac>=3.5"]
 keck = ["pykoa>=1.7", "drizzle>=2.0"]
 # High-fidelity PSF reconstruction back-ends (tier 3 of the PSF design).
 psf = ["psfr"]
+# Per-exposure frame products: deep-learned per-frame cosmic-ray masks
+# (mask-only; pulls torch, hence not a base dependency).
+frames = ["deepCR"]
 test = ["pytest"]
 dev = ["pytest", "black"]
 

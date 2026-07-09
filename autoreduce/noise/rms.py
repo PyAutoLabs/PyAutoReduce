@@ -107,6 +107,18 @@ def mask_isolated_bad_pixels(
     if n_bad == 0:
         return data_cut, noise_cut, {"n_masked_pixels": 0}
 
+    # "Isolated" is enforced: a bad pixel with two or more bad 4-neighbours
+    # marks a structured defect (blob/column), which must fail loudly — only
+    # scattered singletons and pairs are maskable.
+    neighbours = sum(
+        np.roll(bad, shift, axis) for shift, axis in ((1, 0), (-1, 0), (1, 1), (-1, 1))
+    )
+    if (bad & (neighbours >= 2)).any():
+        raise ValueError(
+            f"structured bad-pixel region in {region_name} ({n_bad} bad px with "
+            f"contiguous clustering) — fix the reduction, don't mask a defect"
+        )
+
     fraction = n_bad / bad.size
     if fraction > max_bad_fraction:
         raise ValueError(

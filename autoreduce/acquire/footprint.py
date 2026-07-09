@@ -17,27 +17,31 @@ from typing import List, Tuple
 
 
 def covers_target(path: Path, ra: float, dec: float, margin_arcsec: float) -> bool:
-    """True if any SCI extension's footprint contains (ra, dec) ± margin."""
+    """True if any SCI extension's footprint contains (ra, dec) ± margin.
+
+    Containment is tested in *pixel* space (project the target through the
+    extension's WCS, allow a margin in pixels) — immune to the RA-wraparound
+    and cos(dec) pitfalls of sky-coordinate bounding boxes.
+    """
     import numpy as np
     from astropy.io import fits
     from astropy.wcs import WCS
+    from astropy.wcs.utils import proj_plane_pixel_scales
 
-    margin_deg = margin_arcsec / 3600.0
     with fits.open(path) as hdul:
         for hdu in hdul:
             if hdu.name != "SCI" or hdu.data is None:
                 continue
             wcs = WCS(hdu.header, naxis=2)
             ny, nx = hdu.data.shape[-2], hdu.data.shape[-1]
-            corners = wcs.pixel_to_world_values(
-                [0, nx - 1, nx - 1, 0], [0, 0, ny - 1, ny - 1]
+            x, y = wcs.world_to_pixel_values(ra, dec)
+            if not (np.isfinite(x) and np.isfinite(y)):
+                continue
+            scale_arcsec = float(
+                np.mean(proj_plane_pixel_scales(wcs)) * 3600.0
             )
-            ras = np.asarray(corners[0], dtype=float)
-            decs = np.asarray(corners[1], dtype=float)
-            if (
-                ras.min() - margin_deg <= ra <= ras.max() + margin_deg
-                and decs.min() - margin_deg <= dec <= decs.max() + margin_deg
-            ):
+            m = margin_arcsec / scale_arcsec
+            if -m <= float(x) <= nx - 1 + m and -m <= float(y) <= ny - 1 + m:
                 return True
     return False
 

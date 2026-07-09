@@ -100,7 +100,10 @@ def compare(band: str, out_dir: Path) -> dict:
 
     bright = demo_data > 10 * np.nanmedian(demo_noise)
     data_ratio = new_data_r[bright] / demo_data[bright]
-    noise_ratio = new_noise_r / demo_noise
+    # Exclude masked-by-noise pixels (1e8) and their shift-interpolation
+    # bleed from the parity statistics.
+    valid = new_noise_r < 1.0e6
+    noise_ratio = np.where(valid, new_noise_r / demo_noise, np.nan)
     return {
         "band": band,
         "offset": [float(dy), float(dx)],

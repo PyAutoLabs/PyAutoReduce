@@ -108,8 +108,14 @@ def reduce_target(
         header = hdul[0].header.copy()
     wht = fits.getdata(wht_path)
     exptime = header.get("EXPTIME", header.get("TEXPTIME"))
-    if exptime is None or exptime <= 0:
+    # Only the HST noise construction divides by exposure time; the JWST path
+    # reads propagated ERR and needs no exptime — record it if present, but
+    # never hard-fail a reduction that doesn't use it.
+    if adapter.combine_backend != "jwst_image3" and (
+        exptime is None or exptime <= 0
+    ):
         raise ValueError(f"mosaic header carries no positive EXPTIME: {exptime}")
+    exptime = float(exptime) if exptime else 0.0
 
     # -- noise -----------------------------------------------------------------
     if adapter.combine_backend == "jwst_image3":

@@ -34,7 +34,8 @@ def combine(
     from jwst.associations.lib.rules_level3_base import DMS_Level3_Base
     from jwst.pipeline import Image3Pipeline
 
-    output_dir = Path(output_dir)
+    # Resolve before the chdir below: relative paths would dangle afterwards.
+    output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     product_name = f"{spec.name}_{spec.filter_name}".lower()
 

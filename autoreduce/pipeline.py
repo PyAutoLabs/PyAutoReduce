@@ -181,13 +181,25 @@ def reduce_target(
     record["psf"] = psf_diag
 
     # -- package ----------------------------------------------------------------
-    data_cut = cutout_mod.cutout_to_fits(
-        sci, header, spec.ra, spec.dec, spec.cutout_shape, out_dir / "data.fits"
+    data_cut, data_header, center_xy = cutout_mod.make_cutout(
+        sci, header, spec.ra, spec.dec, spec.cutout_shape
     )
-    noise_cut = cutout_mod.cutout_to_fits(
-        noise, header, spec.ra, spec.dec, spec.cutout_shape, out_dir / "noise_map.fits"
+    noise_cut, noise_header, _ = cutout_mod.make_cutout(
+        noise, header, spec.ra, spec.dec, spec.cutout_shape
+    )
+    # Isolated dead/rejected pixels are masked-by-noise (recorded); the loud
+    # failure remains for excessive masking or bad pixels near the lens.
+    data_cut, noise_cut, mask_diag = rms_mod.mask_isolated_bad_pixels(
+        data_cut,
+        noise_cut,
+        center_xy=center_xy,
+        pixel_scale=spec.final_scale,
+        region_name=f"{spec.name} cutout",
     )
     rms_mod.assert_finite_within(noise_cut, f"{spec.name} cutout")
+    cutout_mod.write_fits(data_cut, data_header, out_dir / "data.fits")
+    cutout_mod.write_fits(noise_cut, noise_header, out_dir / "noise_map.fits")
+    record["bad_pixel_policy"] = mask_diag
 
     fits.PrimaryHDU(psf.astype(np.float32)).writeto(
         out_dir / "psf.fits", overwrite=True

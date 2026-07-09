@@ -19,6 +19,7 @@ from .acquire import cache as cache_mod
 from .acquire import crds as crds_mod
 from .acquire import footprint as footprint_mod
 from .acquire import mast as mast_mod
+from .acquire import quality as quality_mod
 from .align import diagnostics as align_mod
 from .drizzle import combine as combine_mod
 from .drizzle.diagnostics import check_weight_uniformity
@@ -218,6 +219,10 @@ def _acquire(ctx: _StageContext) -> None:
     ):
         crds_mod.sync_best_references(exposures)
         refs_synced = True
+    # Usability screen: MAST serves failed exposures (EXPFLAG "EXCESSIVE
+    # DOWNTIME", EXPTIME 0) alongside the good ones — no science content,
+    # never combined or packaged. Runs on cached lists too.
+    exposures, unusable = quality_mod.filter_usable_exposures(exposures)
     # Detector-footprint filter: only exposures covering the target enter
     # combination — survey visits span many detectors that never touch it,
     # and combining them wastes memory (image3 OOM) and time.
@@ -230,6 +235,8 @@ def _acquire(ctx: _StageContext) -> None:
         "n_exposures": len(exposures),
         "exposures": [Path(p).name for p in exposures],
         "n_skipped_off_target": len(skipped),
+        "n_skipped_unusable": len(unusable),
+        "unusable_exposures": [Path(p).name for p in unusable],
         "downloaded": downloaded,
         "references_synced": refs_synced,
     }

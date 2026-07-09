@@ -88,3 +88,41 @@ class TestEviction:
         refs.mkdir(parents=True)
         (refs / "flat.fits").write_bytes(b"x" * 10_000)
         assert cache.size_bytes() == 0
+
+
+class TestUsabilityScreen:
+    def _exposure(self, tmp_path, name, exptime):
+        from astropy.io import fits
+
+        hdu = fits.PrimaryHDU()
+        if exptime is not None:
+            hdu.header["EXPTIME"] = exptime
+        path = tmp_path / name
+        hdu.writeto(path)
+        return path
+
+    def test_zero_exptime_screened_out(self, tmp_path):
+        from autoreduce.acquire.quality import filter_usable_exposures
+
+        good = self._exposure(tmp_path, "good_flc.fits", 522.0)
+        # A failed exposure (EXPFLAG "EXCESSIVE DOWNTIME") ships EXPTIME 0.
+        failed = self._exposure(tmp_path, "failed_flc.fits", 0.0)
+        usable, unusable = filter_usable_exposures([good, failed])
+        assert usable == [good]
+        assert unusable == [failed]
+
+    def test_missing_exptime_is_kept(self, tmp_path):
+        from autoreduce.acquire.quality import filter_usable_exposures
+
+        no_kw = self._exposure(tmp_path, "jw_cal.fits", None)
+        usable, unusable = filter_usable_exposures([no_kw])
+        assert usable == [no_kw] and unusable == []
+
+    def test_nothing_usable_is_loud(self, tmp_path):
+        import pytest
+
+        from autoreduce.acquire.quality import filter_usable_exposures
+
+        failed = self._exposure(tmp_path, "failed_flc.fits", 0.0)
+        with pytest.raises(LookupError, match="no science content"):
+            filter_usable_exposures([failed])

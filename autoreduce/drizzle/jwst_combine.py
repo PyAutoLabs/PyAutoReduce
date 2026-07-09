@@ -54,6 +54,7 @@ def combine(
             str(asn_path),
             output_dir=str(output_dir),
             save_results=True,  # stpipe .call() discards results otherwise
+            in_memory=False,  # on-disk models: image3 OOMs this machine otherwise
             steps={
                 "resample": {
                     "pixel_scale": spec.final_scale,

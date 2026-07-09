@@ -122,3 +122,40 @@ def test_find_stars_handles_nan_borders():
         peak_max=None,
     )
     assert stars is not None and len(stars) == 3
+
+
+class TestFootprintFilter:
+    def _cal_file(self, tmp_path, name, crval):
+        import numpy as np
+        from astropy.io import fits
+        from astropy.wcs import WCS
+
+        wcs = WCS(naxis=2)
+        wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+        wcs.wcs.crval = list(crval)
+        wcs.wcs.crpix = [50.5, 50.5]
+        wcs.wcs.cdelt = [-1.0 / 3600.0, 1.0 / 3600.0]  # 100" x 100" footprint
+        sci = fits.ImageHDU(np.zeros((100, 100), dtype="f4"), header=wcs.to_header())
+        sci.name = "SCI"
+        path = tmp_path / name
+        fits.HDUList([fits.PrimaryHDU(), sci]).writeto(path)
+        return path
+
+    def test_keeps_covering_drops_off_target(self, tmp_path):
+        from autoreduce.acquire.footprint import filter_to_target
+
+        on = self._cal_file(tmp_path, "on_cal.fits", (150.1, 1.893))
+        off = self._cal_file(tmp_path, "off_cal.fits", (150.5, 2.4))
+        covering, skipped = filter_to_target(
+            [on, off], ra=150.1, dec=1.893, margin_arcsec=10.0
+        )
+        assert covering == [on] and skipped == [off]
+
+    def test_nothing_covering_is_loud(self, tmp_path):
+        import pytest as _pytest
+
+        from autoreduce.acquire.footprint import filter_to_target
+
+        off = self._cal_file(tmp_path, "off_cal.fits", (150.5, 2.4))
+        with _pytest.raises(LookupError, match="cover"):
+            filter_to_target([off], ra=150.1, dec=1.893, margin_arcsec=10.0)

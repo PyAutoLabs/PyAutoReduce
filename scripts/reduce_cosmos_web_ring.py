@@ -46,6 +46,10 @@ def spec_for(band: str) -> TargetSpec:
         dec=DEC,
         instrument=adapter.key,
         filter_name=band,
+        # COSMOS-Web only: the demo parity products are built from program
+        # 1727 mosaics; other programs at these coords (e.g. 5893) would
+        # change the depth and skew the noise parity.
+        proposal_ids=("1727",),
         final_scale=adapter.recommended_final_scale,
         final_pixfrac=1.0,  # COSMOS-Web mosaics use the full drop
         cutout_shape=shape,

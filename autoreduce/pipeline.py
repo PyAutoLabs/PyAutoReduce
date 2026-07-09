@@ -16,6 +16,7 @@ import numpy as np
 from . import instruments
 from .acquire import cache as cache_mod
 from .acquire import crds as crds_mod
+from .acquire import footprint as footprint_mod
 from .acquire import mast as mast_mod
 from .align import diagnostics as align_mod
 from .drizzle import combine as combine_mod
@@ -73,9 +74,17 @@ def reduce_target(
     ):
         crds_mod.sync_best_references(exposures)
         refs_synced = True
+    # Detector-footprint filter: only exposures covering the target enter
+    # combination — survey visits span many detectors that never touch it,
+    # and combining them wastes memory (image3 OOM) and time.
+    cutout_extent = 0.5 * max(spec.cutout_shape) * spec.final_scale
+    exposures, skipped = footprint_mod.filter_to_target(
+        exposures, spec.ra, spec.dec, margin_arcsec=cutout_extent + 15.0
+    )
     record["acquire"] = {
         "n_exposures": len(exposures),
         "exposures": [Path(p).name for p in exposures],
+        "n_skipped_off_target": len(skipped),
         "downloaded": downloaded,
         "references_synced": refs_synced,
     }
@@ -190,7 +199,8 @@ def reduce_target(
         "products": ["data.fits", "noise_map.fits", "psf.fits", "psf_full.fits"],
         "cutout_shape": list(spec.cutout_shape),
         "pixel_scale": spec.final_scale,
-        "data_units": drizzle_prov["drizzle_kwargs"]["final_units"],
+        # Backend-agnostic: both backends stamp BUNIT on the mosaic header.
+        "data_units": str(header.get("BUNIT", "unknown")),
     }
 
     provenance_mod.write_reduction_json(out_dir, record)

@@ -58,8 +58,11 @@ def build_epsf(
     positions = Table(
         {"x": stars_table["xcentroid"], "y": stars_table["ycentroid"]}
     )
-    # Extraction window comfortably larger than the extended kernel.
-    size = max(psf_full_shape) + 10
+    # Extraction window comfortably larger than the extended kernel — the
+    # +20 pad gives EPSFBuilder's recentering iterations room; with only +10,
+    # drifting stars trip a photutils 2.3 internal crash (malformed
+    # overlap_slices) instead of its designed warn-and-skip handling.
+    size = max(psf_full_shape) + 20
     if size % 2 == 0:
         size += 1
     stars = extract_stars(NDData(sci), positions, size=size)

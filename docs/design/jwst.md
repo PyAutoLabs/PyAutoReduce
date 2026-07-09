@@ -16,6 +16,17 @@ the jwst pipeline reads `CRDS_PATH` directly — no `jref`-style variable).
 | psf | tier-1 ePSF unchanged (NaN-masked star finding); **no full-well peak cut** — meaningless in surface-brightness units, and saturated cores arrive blanked from level 2. STPSF is the designated tier-2 back-end (open item) |
 | scales | SW native 0.031″ → recommended 0.03″; LW native 0.063″ → recommended 0.06″ (the COSMOS-Web mosaic convention the parity anchor uses). Filter→channel routing via `nircam_adapter_for_filter` |
 
+## Parity interpretation (maintainer guidance, 2026-07-09)
+
+The demo dataset descends from the **bespoke COSMOS-Web team pipeline**
+(custom 1/f destriping, wisp/snowball handling, their calibration vintage,
+mosaics at 0.03″ SW / 0.06″ LW). The acceptance bar is therefore **"close +
+internally consistent," not reproduction** — strong lensing needs its own
+pipeline (this one), and order-unity data/noise ratios against the team
+products are expected and acceptable. What must hold: our own internal
+closures (sky vs ERR floor, WHT uniformity over the cutout, masked-pixel
+policy) and cross-band consistency of any global scale offset.
+
 ## Validation anchor — the COSMOS-Web ring, four bands
 
 The autolens_assistant demo dataset

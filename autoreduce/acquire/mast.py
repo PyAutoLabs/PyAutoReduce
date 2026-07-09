@@ -18,6 +18,17 @@ from typing import List, Optional, Sequence
 from ..instruments import InstrumentAdapter
 
 
+def is_direct_product(filename: str) -> bool:
+    """True for a direct calibrated product; False for renamed HAP copies.
+
+    MAST attaches HAP visit-level copies (``hst_<proposal>_..._flc.fits``)
+    to the *member exposure's own product list*, so filtering observations
+    is not enough — the product table needs the same hygiene or every
+    exposure downloads twice.
+    """
+    return not str(filename).startswith("hst_")
+
+
 def is_direct_observation(obs_id: str, proposal_id: str) -> bool:
     """True for a direct program observation, False for HAP products."""
     # All HAP obs_ids are hst_* — skycells AND visit-level associations.
@@ -92,13 +103,26 @@ def download_exposures(
         productSubGroupDescription=[adapter.calibrated_suffix],
         mrp_only=False,
     )
+    if len(calibrated) > 0:
+        import numpy as np
+
+        direct = np.array(
+            [is_direct_product(fn) for fn in calibrated["productFilename"]]
+        )
+        calibrated = calibrated[direct]
     if len(calibrated) == 0:
         raise LookupError(
-            f"observations carry no {adapter.calibrated_suffix} products"
+            f"observations carry no direct {adapter.calibrated_suffix} products"
         )
     Observations.download_products(calibrated, download_dir=str(download_dir))
     suffix = f"_{adapter.calibrated_suffix.lower()}.fits"
-    paths = sorted(set(Path(download_dir).rglob(f"*{suffix}")))
+    # The glob applies the same hygiene: the download dir may still hold HAP
+    # copies from acquisitions that predate the product filter.
+    paths = sorted(
+        p
+        for p in set(Path(download_dir).rglob(f"*{suffix}"))
+        if is_direct_product(p.name)
+    )
     if not paths:
         raise FileNotFoundError(
             f"download reported success but no *{suffix} files under {download_dir}"

@@ -150,6 +150,13 @@ def test_mast_query_hygiene():
     # direct rows drizzles every exposure twice.
     assert not is_direct_observation("hst_10886_01_acs_wfc_f814w_j9op01l7", "10886")
 
+    # MAST also attaches the HAP copies to the member exposure's own product
+    # list, so the product table needs the same hygiene.
+    from autoreduce.acquire.mast import is_direct_product
+
+    assert is_direct_product("j9op01l7q_flc.fits")
+    assert not is_direct_product("hst_10886_01_acs_wfc_f814w_j9op01l7_flc.fits")
+
 
 def test_reject_crowded_matches_reference_loop():
     """Randomized equivalence vs the original O(N^2) loop implementation."""

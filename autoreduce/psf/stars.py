@@ -31,13 +31,10 @@ class StarSelection:
 
 def reject_crowded(x: np.ndarray, y: np.ndarray, min_separation: float) -> np.ndarray:
     """Boolean mask keeping sources with no neighbour within min_separation."""
-    keep = np.ones(len(x), dtype=bool)
-    for i in range(len(x)):
-        d2 = (x - x[i]) ** 2 + (y - y[i]) ** 2
-        d2[i] = np.inf
-        if (d2 < min_separation**2).any():
-            keep[i] = False
-    return keep
+    n = len(x)
+    d2 = (x[:, None] - x[None, :]) ** 2 + (y[:, None] - y[None, :]) ** 2
+    d2[np.arange(n), np.arange(n)] = np.inf
+    return ~(d2 < min_separation**2).any(axis=1)
 
 
 def reject_edges(

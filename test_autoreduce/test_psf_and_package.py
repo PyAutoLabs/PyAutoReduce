@@ -145,3 +145,57 @@ def test_mast_query_hygiene():
     assert is_direct_observation("j9op01010", "10886")
     assert not is_direct_observation("hst_skycell-p1322x03y02_acs_wfc_f814w_all", "--")
     assert not is_direct_observation("j9op01010", "--")
+
+
+def test_reject_crowded_matches_reference_loop():
+    """Randomized equivalence vs the original O(N^2) loop implementation."""
+    from autoreduce.psf.stars import reject_crowded
+
+    def reference(x, y, min_separation):
+        keep = np.ones(len(x), dtype=bool)
+        for i in range(len(x)):
+            d2 = (x - x[i]) ** 2 + (y - y[i]) ** 2
+            d2[i] = np.inf
+            if (d2 < min_separation**2).any():
+                keep[i] = False
+        return keep
+
+    rng = np.random.default_rng(7)
+    for n in (0, 1, 2, 50, 300):
+        x = rng.uniform(0, 500, n)
+        y = rng.uniform(0, 500, n)
+        for sep in (1.0, 25.0, 100.0):
+            assert (
+                reject_crowded(x, y, sep) == reference(x, y, sep)
+            ).all(), (n, sep)
+
+
+def test_registered_ratios_recovers_known_shift_and_scale():
+    from scipy.ndimage import shift as nd_shift
+
+    from autoreduce.validation import registered_ratios
+
+    rng = np.random.default_rng(3)
+    ref_data = rng.normal(0.0, 0.01, (120, 120))
+    yy, xx = np.mgrid[0:120, 0:120]
+    ref_data += 8.0 * np.exp(-(((xx - 60) ** 2 + (yy - 60) ** 2) / (2 * 3.0**2)))
+    ref_noise = np.full((120, 120), 0.01)
+
+    new_data = 1.5 * nd_shift(ref_data, (1.25, -0.75), order=3)
+    new_noise = 2.0 * ref_noise
+    out = registered_ratios(new_data, new_noise, ref_data, ref_noise)
+    # The offset is the shift applied to `new` to register it onto `ref` —
+    # the negative of new's displacement.
+    assert out["offset"][0] == pytest.approx(-1.25, abs=0.15)
+    assert out["offset"][1] == pytest.approx(0.75, abs=0.15)
+    assert out["data_ratio_median"] == pytest.approx(1.5, rel=0.05)
+    assert out["noise_ratio_median"] == pytest.approx(2.0, rel=0.05)
+
+    # Masked-by-noise pixels are excluded from the noise statistics.
+    new_noise_masked = new_noise.copy()
+    new_noise_masked[5, 5] = 1.0e8
+    out2 = registered_ratios(new_data, new_noise_masked, ref_data, ref_noise)
+    assert out2["noise_ratio_median"] == pytest.approx(2.0, rel=0.05)
+
+    with pytest.raises(ValueError, match="shape mismatch"):
+        registered_ratios(new_data[:100], new_noise[:100], ref_data, ref_noise)

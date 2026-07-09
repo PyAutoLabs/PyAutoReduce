@@ -18,8 +18,6 @@ import numpy as np
 
 from ..instruments import InstrumentAdapter
 from ..target import TargetSpec
-from .diagnostics import check_weight_uniformity
-from ..noise.rms import casertano_r
 
 
 def combine(
@@ -34,23 +32,18 @@ def combine(
     from jwst.associations.lib.rules_level3_base import DMS_Level3_Base
     from jwst.pipeline import Image3Pipeline
 
-    # Resolve before the chdir below: relative paths would dangle afterwards.
-    output_dir = Path(output_dir).resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
+    from ._common import chdir_scratch, combine_provenance
+
     product_name = f"{spec.name}_{spec.filter_name}".lower()
+    with chdir_scratch(output_dir) as output_dir:
+        asn = asn_from_list(
+            [str(p) for p in exposures], rule=DMS_Level3_Base,
+            product_name=product_name,
+        )
+        asn_path = output_dir / f"{product_name}_asn.json"
+        _, serialized = asn.dump(format="json")
+        asn_path.write_text(serialized)
 
-    asn = asn_from_list(
-        [str(p) for p in exposures], rule=DMS_Level3_Base, product_name=product_name
-    )
-    asn_path = output_dir / f"{product_name}_asn.json"
-    _, serialized = asn.dump(format="json")
-    asn_path.write_text(serialized)
-
-    import os
-
-    cwd = os.getcwd()
-    os.chdir(output_dir)
-    try:
         Image3Pipeline.call(
             str(asn_path),
             output_dir=str(output_dir),
@@ -68,8 +61,6 @@ def combine(
                 },
             },
         )
-    finally:
-        os.chdir(cwd)
 
     i2d = output_dir / f"{product_name}_i2d.fits"
     if not i2d.exists():
@@ -92,22 +83,19 @@ def combine(
         fits.PrimaryHDU(data, header=header).writeto(path, overwrite=True)
         paths[name] = path
 
-    provenance = {
-        "backend": "jwst_image3",
-        "n_exposures": len(exposures),
-        "exposures": [Path(p).name for p in exposures],
-        "single_exposure_branch": len(exposures) == 1,
-        "resample_kwargs": {
+    provenance = combine_provenance(
+        spec,
+        adapter,
+        exposures,
+        wht,
+        kwargs_key="resample_kwargs",
+        kwargs={
             "pixel_scale": spec.final_scale,
             "pixfrac": spec.final_pixfrac,
             "kernel": spec.final_kernel,
             "rotation": 0.0,
         },
-        "correlated_noise_factor": casertano_r(
-            spec.final_pixfrac, adapter.scale_ratio(spec.final_scale)
-        ),
-        "weight_uniformity": check_weight_uniformity(wht),
-        "err_path": str(paths["err"]),
-        "i2d_path": str(i2d),
-    }
+        head={"backend": "jwst_image3"},
+        tail={"err_path": str(paths["err"]), "i2d_path": str(i2d)},
+    )
     return paths["sci"], paths["wht"], provenance

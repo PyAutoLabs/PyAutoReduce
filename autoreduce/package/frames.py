@@ -85,6 +85,23 @@ def _units_to_cps(bunit: str, exptime: float) -> Tuple[float, str]:
     )
 
 
+def _sip_only_header(hdr):
+    """
+    Copy of a SCI header with the lookup-table distortion keywords removed.
+
+    HST calibrated headers carry CPDIS/DP (NPOL) and D2IM lookup-table
+    distortion that only resolves against the open HDUList; astropy's WCS
+    raises if they are parsed without it. The frame cutout ships the SIP
+    part only, so strip the lookup keywords rather than carrying dead
+    references to extensions the cutout file does not have.
+    """
+    out = hdr.copy()
+    for card in list(out.cards):
+        if str(card.keyword).startswith(("CPDIS", "CPERR", "DP1", "DP2", "D2IM")):
+            out.remove(card.keyword, ignore_missing=True, remove_all=True)
+    return out
+
+
 def _write_product(data: np.ndarray, header, out_path: Path, dtype) -> None:
     from astropy.io import fits
 
@@ -118,7 +135,9 @@ def _package_one_chip(
 
     # The written header uses the SIP-only WCS (FITS-serializable); the
     # lookup-table residual (~0.1 px) is recorded in the manifest note.
-    wcs_sip = WCS(hdr, naxis=2)
+    # The NPOL/D2IM keywords must be stripped first: astropy raises on a
+    # CPDIS/D2IM header parsed without the open HDUList (fobj).
+    wcs_sip = WCS(_sip_only_header(hdr), naxis=2)
     try:
         cut = Cutout2D(
             sci_hdu.data.astype(float),

@@ -258,6 +258,30 @@ class TestFrameProducts:
         with fits.open(chip_dir / "data.fits") as f:
             assert f[0].header["A_ORDER"] == 2
 
+    def test_lookup_distortion_keywords_stripped(self):
+        # Real _flc SCI headers carry CPDIS/DP (NPOL) and D2IM lookup-table
+        # distortion; astropy raises if WCS parses them without the open
+        # HDUList, so the SIP-only cutout header must strip them (found by
+        # the slacs0008 validation run). Synthetic files cannot carry fake
+        # lookup keywords through the full-WCS path (no WCSDVARR extensions
+        # to resolve), so the helper is tested directly.
+        from astropy.wcs import WCS
+
+        hdr = _frame_hdul(nchips=1)["SCI", 1].header
+        hdr["CPDIS1"] = "Lookup"
+        hdr["CPDIS2"] = "Lookup"
+        for axis in (1, 2):
+            hdr[f"DP{axis}.EXTVER"] = float(axis)
+            hdr[f"DP{axis}.NAXES"] = 2.0
+            hdr[f"DP{axis}.AXIS.1"] = 1.0
+            hdr[f"DP{axis}.AXIS.2"] = 2.0
+        with pytest.raises(ValueError, match="HDUList is required"):
+            WCS(hdr, naxis=2)  # the crash the helper exists to prevent
+        stripped = frames_mod._sip_only_header(hdr)
+        for key in stripped:
+            assert not str(key).startswith(("CPDIS", "CPERR", "DP1", "DP2", "D2IM"))
+        assert WCS(stripped, naxis=2).has_celestial
+
     def test_target_pixel_roundtrip(self, no_cr, tmp_path):
         from astropy.io import fits
         from astropy.wcs import WCS

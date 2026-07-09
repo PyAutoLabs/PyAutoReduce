@@ -43,6 +43,17 @@ class TargetSpec:
     # Alignment: residual (pixels) above which TweakReg refinement triggers.
     alignment_tolerance_pix: float = 0.1
 
+    # Ground-based (KOA) additions — ignored by space-based instruments.
+    # Explicit KOA identifiers pin the science frame set exactly (the raw
+    # archive has no association tables); None = query by coords + program.
+    koa_science_ids: Optional[Tuple[str, ...]] = None
+    # PSF-star frames from the same program/night, reduced pipeline-identically
+    # into candidate PSF products (tier A; docs/design/keck_ao.md stage 6).
+    koa_psf_star_ids: Optional[Tuple[str, ...]] = None
+    # Running-sky window: number of temporally adjacent frames the per-frame
+    # sky is medianed over (K'-band sky varies on minutes timescales).
+    sky_window: int = 9
+
     def __post_init__(self):
         if not -360.0 <= self.ra <= 360.0:
             raise ValueError(f"ra out of range: {self.ra}")
@@ -68,8 +79,9 @@ class TargetSpec:
         for key in ("cutout_shape", "psf_shape", "psf_full_shape"):
             if key in raw:
                 raw[key] = tuple(raw[key])
-        if raw.get("proposal_ids") is not None:
-            raw["proposal_ids"] = tuple(str(p) for p in raw["proposal_ids"])
+        for key in ("proposal_ids", "koa_science_ids", "koa_psf_star_ids"):
+            if raw.get(key) is not None:
+                raw[key] = tuple(str(p) for p in raw[key])
         return cls(**raw)
 
     def as_dict(self) -> dict:

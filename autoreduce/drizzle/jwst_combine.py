@@ -10,7 +10,6 @@ normalizes it to the package's internal contract — standalone ``sci``/``wht``/
 stage (noise, psf, package) is backend-agnostic.
 """
 
-import json
 from pathlib import Path
 from typing import Dict, List, Tuple
 

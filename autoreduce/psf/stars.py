@@ -23,8 +23,8 @@ class StarSelection:
     round_limit: float = 0.3
     saturation_fraction: float = 0.7  # of adapter.saturation_dn, in counts
     min_separation_pix: float = 25.0
-    # Must exceed half the ePSF extraction window (psf_full 61 + 20 pad -> 41)
-    # or edge stars pass selection only to be dropped at extraction.
+    # Must exceed half the ePSF extraction window (psf_full 61 + 20 pad ->
+    # half-window 41), plus headroom for EPSFBuilder recentering drift.
     edge_margin_pix: int = 46
     exclusion_radius_pix: float = 50.0  # around the target itself
 

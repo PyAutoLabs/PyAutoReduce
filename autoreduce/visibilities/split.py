@@ -12,6 +12,7 @@ recipe's own re-run behaviour. ``datacolumn="data"`` throughout: calibrated
 placeholders. casatasks is imported inside functions.
 """
 
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -27,26 +28,43 @@ def spw_ms_path(work_dir: Path, uid: str, field: str, spw: str, width: int) -> P
     return Path(work_dir) / ms_name(uid, field, "spw", spw, "width", width)
 
 
-def split_field(ms: Path, uid: str, field: str, work_dir: Path) -> Path:
-    """Isolate one science field from a calibrated per-uid MS."""
-    out = field_ms_path(work_dir, uid, field)
+def _split(vis: Path, out: Path, field: str, spw: str, width=None) -> Path:
+    """
+    One idempotent casatasks.split. The task writes to a ``.partial``
+    directory that is renamed into place only on success, so an existing
+    output MS always means a *complete* prior split — an interrupted run
+    (OOM, SIGKILL) never leaves a half-written MS that a resume would
+    silently reuse.
+    """
     if out.is_dir():
         return out
     from casatasks import split
 
-    Path(work_dir).mkdir(parents=True, exist_ok=True)
-    split(
-        vis=str(ms),
-        outputvis=str(out),
+    out.parent.mkdir(parents=True, exist_ok=True)
+    partial = out.with_name(out.name + ".partial")
+    if partial.exists():
+        shutil.rmtree(partial)
+    kwargs = dict(
+        vis=str(vis),
+        outputvis=str(partial),
         keepmms=True,
         field=field,
-        spw="",
+        spw=str(spw),
         datacolumn="data",
         keepflags=False,
     )
-    if not out.is_dir():
-        raise IOError(f"casatasks.split produced no output MS: {out}")
+    if width is not None:
+        kwargs["width"] = width
+    split(**kwargs)
+    if not partial.is_dir():
+        raise IOError(f"casatasks.split produced no output MS: {partial}")
+    partial.rename(out)
     return out
+
+
+def split_field(ms: Path, uid: str, field: str, work_dir: Path) -> Path:
+    """Isolate one science field from a calibrated per-uid MS."""
+    return _split(ms, field_ms_path(work_dir, uid, field), field=field, spw="")
 
 
 def split_spw(
@@ -55,24 +73,13 @@ def split_spw(
     """One spw, channel-averaged by ``width`` (already resolved, >= 1)."""
     if width < 1:
         raise ValueError(f"width must be resolved to >= 1 before split: {width}")
-    out = spw_ms_path(work_dir, uid, field, spw, width)
-    if out.is_dir():
-        return out
-    from casatasks import split
-
-    split(
-        vis=str(field_ms),
-        outputvis=str(out),
-        keepmms=True,
+    return _split(
+        field_ms,
+        spw_ms_path(work_dir, uid, field, spw, width),
         field=field,
-        spw=str(spw),
-        datacolumn="data",
+        spw=spw,
         width=width,
-        keepflags=False,
     )
-    if not out.is_dir():
-        raise IOError(f"casatasks.split produced no output MS: {out}")
-    return out
 
 
 def resolve_width(width: int, spw: str, num_chan_by_spw) -> int:
@@ -85,6 +92,8 @@ def resolve_width(width: int, spw: str, num_chan_by_spw) -> int:
         return int(width)
     if width < 0:
         raise ValueError(f"width must be >= 0: {width}")
+    if num_chan_by_spw is None:
+        raise ValueError("width=0 (collapse the spw) needs NUM_CHAN per spw")
     index = int(spw)
     num_chan = np.asarray(num_chan_by_spw)
     if index >= num_chan.size:

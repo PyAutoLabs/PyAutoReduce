@@ -15,11 +15,12 @@ serve those as a plain anonymous download; they arrive by one of
 astroquery is imported inside functions so the package imports without it.
 """
 
+import hashlib
 import tarfile
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
-from ..instruments.alma import ms_name
+from ..instruments.alma import MS_SUFFIX, ms_name
 
 
 def resolve_calibrated_ms(ms_dir: Path, uids: Sequence[str]) -> List[Path]:
@@ -100,6 +101,18 @@ def download_product_tarballs(
     return [Path(p) for p in downloaded]
 
 
+def tarball_checksums(tarballs: Sequence[Path]) -> Dict[str, str]:
+    """Streaming sha256 (16-hex prefix, the koa idiom) per tarball name."""
+    checksums = {}
+    for tarball in tarballs:
+        digest = hashlib.sha256()
+        with open(tarball, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                digest.update(chunk)
+        checksums[Path(tarball).name] = digest.hexdigest()[:16]
+    return checksums
+
+
 def extract_calibrated_ms_from_tarballs(
     tarballs: Sequence[Path], dest_dir: Path
 ) -> List[Path]:
@@ -111,20 +124,29 @@ def extract_calibrated_ms_from_tarballs(
     """
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
+    # PEP 706 extraction filtering; present on 3.12+ and the backported
+    # security releases of older interpreters (casatools environments can
+    # lag behind).
+    extract_kwargs = {"filter": "data"} if hasattr(tarfile, "data_filter") else {}
     found = set()
     for tarball in tarballs:
-        with tarfile.open(tarball) as tar:
-            members = [
-                m for m in tar.getmembers() if ".ms.split.cal" in m.name
-            ]
-            for member in members:
-                tar.extract(member, path=dest_dir, filter="data")
-                # Record the top-level MS directory, not each table file.
-                parts = Path(member.name).parts
-                for i, part in enumerate(parts):
-                    if part.endswith(".ms.split.cal"):
-                        found.add(dest_dir.joinpath(*parts[: i + 1]))
-                        break
+        try:
+            with tarfile.open(tarball) as tar:
+                members = [m for m in tar.getmembers() if MS_SUFFIX in m.name]
+                for member in members:
+                    tar.extract(member, path=dest_dir, **extract_kwargs)
+                    # Record the top-level MS directory, not each table file.
+                    parts = Path(member.name).parts
+                    for i, part in enumerate(parts):
+                        if part.endswith(MS_SUFFIX):
+                            found.add(dest_dir.joinpath(*parts[: i + 1]))
+                            break
+        except tarfile.ReadError as err:
+            raise IOError(
+                f"tarball {tarball} is unreadable (truncated download from "
+                f"an interrupted run?): {err} — delete it and re-run to "
+                f"re-download"
+            ) from None
     return sorted(found)
 
 

@@ -6,9 +6,10 @@ contract: visibilities, uv_wavelengths and noise_map, each `(Nvis, 2)`.
 Three operations, in order:
 
 1. **Stokes-I combine** over the parallel hands with the MS weights
-   (weight = 1/sigma^2): I = sum(w D)/sum(w), sigma_I = 1/sqrt(sum w).
-   Rows with no positive weight in either hand are dropped loudly (counted
-   in provenance), never zero-filled.
+   (weight = 1/sigma^2): I = sum(w D)/sum(w), sigma_I = 1/sqrt(sum w),
+   where a hand contributes only if its weight is positive and its datum
+   finite. Visibilities with no contributing hand are dropped (counted in
+   provenance), never zero-filled.
 2. **UVW -> wavelengths** per channel frequency (u f / c), giving each
    channel its own uv sample of the same baseline.
 3. **Flatten + concatenate** channels within an MS and then all (uid, spw)
@@ -16,7 +17,7 @@ Three operations, in order:
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Sequence
+from typing import Dict, Sequence
 
 import numpy as np
 
@@ -68,9 +69,12 @@ def stokes_i_combine(data: np.ndarray, weight: np.ndarray):
 
     data: complex (n_pol, n_chan, n_rows); weight: (n_pol, n_rows), the MS
     per-row weights (weight = 1/sigma^2 per complex visibility). Returns
-    (stokes_i (n_chan, n_valid), sigma (n_valid,), keep (n_rows,) bool).
-    Zero/negative/non-finite weights contribute nothing; rows with no
-    contributing hand at all are flagged out via ``keep``.
+    (stokes_i (n_chan, n_rows), sigma (n_chan, n_rows), keep (n_chan, n_rows)
+    bool). A hand contributes only where its weight is positive AND its
+    datum is finite — a non-finite visibility must not keep its weight in
+    the denominator (that would bias the average low, silently). Positions
+    with no contributing hand are flagged out via ``keep``, counted by the
+    caller, never zero-filled.
     """
     data = np.asarray(data)
     weight = np.asarray(weight, dtype=float)
@@ -81,46 +85,60 @@ def stokes_i_combine(data: np.ndarray, weight: np.ndarray):
             f"weight shape {weight.shape} does not match data {data.shape}"
         )
     w = np.where(np.isfinite(weight) & (weight > 0.0), weight, 0.0)
-    w_sum = w.sum(axis=0)  # (n_rows,)
+    finite = np.isfinite(data)
+    if finite.all():
+        # Common case: no per-element masking needed, keep the cheap path
+        # (no (n_pol, n_chan, n_rows) weight materialisation).
+        w_sum = np.broadcast_to(w.sum(axis=0)[None, :], data.shape[1:])
+        numerator = np.einsum("pr,pcr->cr", w, data)
+    else:
+        w_eff = w[:, None, :] * finite
+        w_sum = w_eff.sum(axis=0)
+        numerator = np.einsum(
+            "pcr,pcr->cr", w_eff, np.where(finite, data, 0.0)
+        )
     keep = w_sum > 0.0
     if not np.any(keep):
-        raise ValueError("no visibility row carries positive weight")
-    numerator = np.einsum("pr,pcr->cr", w, np.nan_to_num(data))
-    stokes_i = numerator[:, keep] / w_sum[keep][None, :]
-    sigma = 1.0 / np.sqrt(w_sum[keep])
+        raise ValueError("no visibility carries positive weight")
+    safe_w_sum = np.where(keep, w_sum, 1.0)
+    stokes_i = numerator / safe_w_sum
+    sigma = 1.0 / np.sqrt(safe_w_sum)
     return stokes_i, sigma, keep
 
 
 def assemble_ms_products(columns: MsColumns) -> VisibilitySet:
     """One (uid, spw) MS -> flattened autolens-order arrays + provenance."""
     stokes_i, sigma, keep = stokes_i_combine(columns.data, columns.weight)
-    uv = uv_wavelengths_from_uvw(columns.uvw[:, keep], columns.chan_freq)
+    uv = uv_wavelengths_from_uvw(columns.uvw, columns.chan_freq)
     n_chan, n_rows = stokes_i.shape
 
+    kept = keep.ravel()
     visibilities = np.stack(
-        (stokes_i.real.ravel(), stokes_i.imag.ravel()), axis=-1
+        (stokes_i.real.ravel()[kept], stokes_i.imag.ravel()[kept]), axis=-1
     )
-    uv_wavelengths = uv.reshape(n_chan * n_rows, 2)
+    uv_wavelengths = uv.reshape(n_chan * n_rows, 2)[kept]
     # The MS weight is per complex visibility: the same sigma applies to the
-    # real and imaginary parts. Channels of one row share the row weight.
-    sigma_flat = np.broadcast_to(sigma[None, :], (n_chan, n_rows)).ravel()
+    # real and imaginary parts.
+    sigma_flat = sigma.ravel()[kept]
     noise_map = np.stack((sigma_flat, sigma_flat), axis=-1)
 
-    n_dropped = int(np.size(keep) - np.count_nonzero(keep))
+    row_keep = keep.any(axis=0)
     return VisibilitySet(
         visibilities=visibilities.astype(float),
         uv_wavelengths=uv_wavelengths.astype(float),
         noise_map=noise_map.astype(float),
         provenance={
-            "n_rows": int(np.size(keep)),
-            "n_rows_dropped_zero_weight": n_dropped,
+            "n_rows": int(n_rows),
             "n_channels": int(n_chan),
-            "n_visibilities": int(n_chan * n_rows),
+            "n_visibilities": int(np.count_nonzero(kept)),
+            "n_visibilities_dropped_invalid": int(kept.size - np.count_nonzero(kept)),
             "chan_freq_hz": [float(f) for f in np.atleast_1d(columns.chan_freq)],
             "n_antennas": int(
-                np.union1d(columns.antenna1[keep], columns.antenna2[keep]).size
+                np.union1d(
+                    columns.antenna1[row_keep], columns.antenna2[row_keep]
+                ).size
             ),
-            "n_scans": int(np.unique(columns.scan[keep]).size),
+            "n_scans": int(np.unique(columns.scan[row_keep]).size),
         },
     )
 

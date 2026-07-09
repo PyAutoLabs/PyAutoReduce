@@ -5,7 +5,7 @@ instrument-specific lives behind an `InstrumentAdapter`; no module outside
 """
 
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Union
 
 
 @dataclass(frozen=True)
@@ -78,17 +78,21 @@ class VisibilityInstrumentAdapter:
     archive: str  # which archive the acquire stage queries, e.g. "alma"
 
 
-_REGISTRY: Dict[str, InstrumentAdapter] = {}
+# The shared registry stores both families; consumers dispatch on `.domain`
+# before touching family-specific fields.
+AnyAdapter = Union[InstrumentAdapter, VisibilityInstrumentAdapter]
+
+_REGISTRY: Dict[str, AnyAdapter] = {}
 
 
-def register(adapter: InstrumentAdapter) -> InstrumentAdapter:
+def register(adapter: AnyAdapter) -> AnyAdapter:
     if adapter.key in _REGISTRY:
         raise ValueError(f"instrument adapter already registered: {adapter.key}")
     _REGISTRY[adapter.key] = adapter
     return adapter
 
 
-def get(key: str) -> InstrumentAdapter:
+def get(key: str) -> AnyAdapter:
     try:
         return _REGISTRY[key]
     except KeyError:

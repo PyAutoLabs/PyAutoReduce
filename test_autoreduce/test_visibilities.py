@@ -5,6 +5,8 @@ CASA-touching code is exercised by the validation prototype only, the same
 rule as drizzlepac / the jwst stack.
 """
 
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -74,7 +76,7 @@ class TestStokesICombine:
         weight = np.ones((2, 2))
         stokes_i, sigma, keep = stokes_i_combine(data, weight)
         np.testing.assert_allclose(stokes_i[0], [2.0 + 2j, 4.0 + 0j])
-        np.testing.assert_allclose(sigma, [1.0 / np.sqrt(2.0)] * 2)
+        np.testing.assert_allclose(sigma.ravel(), [1.0 / np.sqrt(2.0)] * 2)
         assert keep.all()
 
     def test_weighted_average_and_sigma(self):
@@ -92,12 +94,30 @@ class TestStokesICombine:
         assert sigma[0] == pytest.approx(1.0 / np.sqrt(2.0))
         assert keep.all()
 
-    def test_dead_rows_are_dropped_not_zero_filled(self):
+    def test_dead_rows_are_flagged_not_zero_filled(self):
         data = np.ones((2, 1, 3), dtype=complex)
         weight = np.array([[1.0, 0.0, 1.0], [1.0, -1.0, 1.0]])
-        stokes_i, _, keep = stokes_i_combine(data, weight)
-        assert list(keep) == [True, False, True]
-        assert stokes_i.shape == (1, 2)
+        _, _, keep = stokes_i_combine(data, weight)
+        assert keep.ravel().tolist() == [True, False, True]
+
+    def test_nonfinite_datum_loses_its_weight(self):
+        # A NaN visibility with positive weight must not bias the average:
+        # its hand drops out of both numerator AND denominator.
+        data = np.array([[[np.nan + 0j]], [[6.0 + 0j]]])
+        weight = np.array([[3.0], [1.0]])
+        stokes_i, sigma, keep = stokes_i_combine(data, weight)
+        assert stokes_i[0, 0] == pytest.approx(6.0)
+        assert sigma[0, 0] == pytest.approx(1.0)  # only the w=1 hand remains
+        assert keep.all()
+
+    def test_nonfinite_in_both_hands_is_dropped_and_counted(self):
+        columns = _columns(n_rows=3)
+        data = columns.data.copy()
+        data[:, 0, 1] = np.nan
+        columns = dataclasses.replace(columns, data=data)
+        result = assemble_ms_products(columns)
+        assert result.provenance["n_visibilities_dropped_invalid"] == 1
+        assert result.visibilities.shape == (2, 2)
 
     def test_all_dead_raises(self):
         with pytest.raises(ValueError, match="positive weight"):
@@ -112,7 +132,7 @@ class TestAssemble:
         assert result.uv_wavelengths.shape == (12, 2)
         assert result.noise_map.shape == (12, 2)
         assert result.provenance["n_visibilities"] == 12
-        assert result.provenance["n_rows_dropped_zero_weight"] == 0
+        assert result.provenance["n_visibilities_dropped_invalid"] == 0
 
     def test_noise_is_equal_on_real_and_imag_and_shared_by_channels(self):
         columns = _columns(n_chan=2, n_rows=3)
@@ -127,18 +147,9 @@ class TestAssemble:
         columns = _columns(n_rows=4)
         weight = columns.weight.copy()
         weight[:, 2] = 0.0
-        columns = MsColumns(
-            data=columns.data,
-            uvw=columns.uvw,
-            weight=weight,
-            chan_freq=columns.chan_freq,
-            antenna1=columns.antenna1,
-            antenna2=columns.antenna2,
-            time=columns.time,
-            scan=columns.scan,
-        )
+        columns = dataclasses.replace(columns, weight=weight)
         result = assemble_ms_products(columns)
-        assert result.provenance["n_rows_dropped_zero_weight"] == 1
+        assert result.provenance["n_visibilities_dropped_invalid"] == 1
         assert result.visibilities.shape == (3, 2)
 
     def test_concatenate_stacks_blocks(self):
@@ -159,16 +170,7 @@ class TestMsColumnsContract:
     def test_shape_mismatch_is_loud(self):
         good = _columns(n_rows=4)
         with pytest.raises(ValueError, match="weight"):
-            MsColumns(
-                data=good.data,
-                uvw=good.uvw,
-                weight=good.weight[:, :2],
-                chan_freq=good.chan_freq,
-                antenna1=good.antenna1,
-                antenna2=good.antenna2,
-                time=good.time,
-                scan=good.scan,
-            )
+            dataclasses.replace(good, weight=good.weight[:, :2])
 
 
 class TestSplitPaths:
@@ -267,6 +269,56 @@ class TestVisibilityPipelineGuards:
             reduce_target(
                 spec, cache_root=tmp_path / "cache", output_root=tmp_path / "out"
             )
+
+
+class TestVisibilityCacheLifecycle:
+    def _spec(self, tmp_path, **extra):
+        return TargetSpec(
+            name="x",
+            ra=0.0,
+            dec=0.0,
+            instrument="alma",
+            alma_uids=("A1",),
+            alma_field="F",
+            alma_spws=("1",),
+            **extra,
+        )
+
+    def test_local_source_skips_cache_lifecycle(self, monkeypatch, tmp_path):
+        # A local alma_ms_dir reduction never creates a cache-manifest
+        # entry, so the lifecycle must not run (mark_completed would raise).
+        from autoreduce import pipeline as pipeline_mod
+        from autoreduce.visibilities import pipeline as vis_mod
+
+        monkeypatch.setattr(
+            vis_mod,
+            "reduce_visibility_target",
+            lambda spec, adapter, cache, out_dir, work_dir: {
+                "acquire": {"source": "local"}
+            },
+        )
+        spec = self._spec(tmp_path, alma_ms_dir=str(tmp_path))
+        record = pipeline_mod.reduce_target(
+            spec, cache_root=tmp_path / "cache", output_root=tmp_path / "out"
+        )
+        assert record["acquire"]["source"] == "local"
+
+    def test_archive_source_runs_cache_lifecycle(self, monkeypatch, tmp_path):
+        from autoreduce import pipeline as pipeline_mod
+        from autoreduce.acquire.cache import ExposureCache
+        from autoreduce.visibilities import pipeline as vis_mod
+
+        def fake_reduce(spec, adapter, cache, out_dir, work_dir):
+            cache.record_download(spec.name, ["t.tar"], source="alma")
+            return {"acquire": {"source": "alma-archive"}}
+
+        monkeypatch.setattr(vis_mod, "reduce_visibility_target", fake_reduce)
+        spec = self._spec(tmp_path, alma_project_code="2016.1.00282.S")
+        pipeline_mod.reduce_target(
+            spec, cache_root=tmp_path / "cache", output_root=tmp_path / "out"
+        )
+        manifest = ExposureCache(tmp_path / "cache").read_manifest()
+        assert "x" in manifest["targets"]
 
 
 class TestInterferometerPackage:

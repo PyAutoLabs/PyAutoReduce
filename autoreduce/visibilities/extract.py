@@ -60,6 +60,11 @@ class MsColumns:
 
 def getcol(ms: Path, table: str, colname: str) -> np.ndarray:
     """One column from one MS table ('' = the main table), as delivered."""
+    return _getcols(ms, table, (colname,))[colname]
+
+
+def _getcols(ms: Path, table: str, colnames) -> dict:
+    """Several columns from one MS table under a single table open."""
     from casatools import table as table_tool
 
     ms = Path(ms)
@@ -68,10 +73,9 @@ def getcol(ms: Path, table: str, colname: str) -> np.ndarray:
     tb = table_tool()
     tb.open(str(ms / table) if table else str(ms))
     try:
-        col = tb.getcol(colname)
+        return {name: np.asarray(tb.getcol(name)) for name in colnames}
     finally:
         tb.close()
-    return np.asarray(col)
 
 
 def columns_from(ms: Path) -> MsColumns:
@@ -82,14 +86,6 @@ def columns_from(ms: Path) -> MsColumns:
     a single-channel (fully collapsed) spw keeps its channel axis, so the
     downstream code has one code path for continuum and line widths.
     """
-    data = np.asarray(getcol(ms, "", "DATA"))
-    if data.ndim == 2:  # some tools drop the length-1 channel axis
-        data = data[:, None, :]
-    if data.ndim != 3:
-        raise ValueError(
-            f"{Path(ms).name}: DATA has shape {data.shape}, expected "
-            f"(n_pol, n_chan, n_rows)"
-        )
     chan_freq = np.atleast_1d(
         np.squeeze(getcol(ms, "SPECTRAL_WINDOW", "CHAN_FREQ"))
     ).astype(float)
@@ -98,15 +94,46 @@ def columns_from(ms: Path) -> MsColumns:
             f"{Path(ms).name}: expected one spectral window after split, "
             f"got CHAN_FREQ shape {chan_freq.shape} — split per spw first"
         )
+    main = _getcols(
+        ms,
+        "",
+        (
+            "DATA",
+            "UVW",
+            "WEIGHT",
+            "ANTENNA1",
+            "ANTENNA2",
+            "TIME",
+            "SCAN_NUMBER",
+        ),
+    )
+    data = main["DATA"]
+    if data.ndim == 2:
+        # Some tools drop a length-1 axis. Only the channel axis can be
+        # re-inserted unambiguously, and only when this spw really has one
+        # channel — anything else must fail loudly, not be guessed at.
+        if chan_freq.size == 1:
+            data = data[:, None, :]
+        else:
+            raise ValueError(
+                f"{Path(ms).name}: DATA has shape {data.shape} but the spw "
+                f"has {chan_freq.size} channels — cannot tell which axis "
+                f"was dropped"
+            )
+    if data.ndim != 3:
+        raise ValueError(
+            f"{Path(ms).name}: DATA has shape {data.shape}, expected "
+            f"(n_pol, n_chan, n_rows)"
+        )
     return MsColumns(
         data=data,
-        uvw=np.asarray(getcol(ms, "", "UVW"), dtype=float),
-        weight=np.asarray(getcol(ms, "", "WEIGHT"), dtype=float),
+        uvw=main["UVW"].astype(float),
+        weight=main["WEIGHT"].astype(float),
         chan_freq=chan_freq,
-        antenna1=np.asarray(getcol(ms, "", "ANTENNA1")),
-        antenna2=np.asarray(getcol(ms, "", "ANTENNA2")),
-        time=np.asarray(getcol(ms, "", "TIME"), dtype=float),
-        scan=np.asarray(getcol(ms, "", "SCAN_NUMBER")),
+        antenna1=main["ANTENNA1"],
+        antenna2=main["ANTENNA2"],
+        time=main["TIME"].astype(float),
+        scan=main["SCAN_NUMBER"],
     )
 
 

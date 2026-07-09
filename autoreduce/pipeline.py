@@ -19,12 +19,14 @@ from .acquire import cache as cache_mod
 from .acquire import crds as crds_mod
 from .acquire import footprint as footprint_mod
 from .acquire import mast as mast_mod
+from .acquire import quality as quality_mod
 from .align import diagnostics as align_mod
 from .drizzle import combine as combine_mod
 from .drizzle.diagnostics import check_weight_uniformity
 from .instruments import InstrumentAdapter
 from .noise import rms as rms_mod
 from .package import cutout as cutout_mod
+from .package import frames as frames_mod
 from .package import provenance as provenance_mod
 from .psf import epsf as epsf_mod
 from .psf import stars as stars_mod
@@ -217,6 +219,10 @@ def _acquire(ctx: _StageContext) -> None:
     ):
         crds_mod.sync_best_references(exposures)
         refs_synced = True
+    # Usability screen: MAST serves failed exposures (EXPFLAG "EXCESSIVE
+    # DOWNTIME", EXPTIME 0) alongside the good ones — no science content,
+    # never combined or packaged. Runs on cached lists too.
+    exposures, unusable = quality_mod.filter_usable_exposures(exposures)
     # Detector-footprint filter: only exposures covering the target enter
     # combination — survey visits span many detectors that never touch it,
     # and combining them wastes memory (image3 OOM) and time.
@@ -229,6 +235,8 @@ def _acquire(ctx: _StageContext) -> None:
         "n_exposures": len(exposures),
         "exposures": [Path(p).name for p in exposures],
         "n_skipped_off_target": len(skipped),
+        "n_skipped_unusable": len(unusable),
+        "unusable_exposures": [Path(p).name for p in unusable],
         "downloaded": downloaded,
         "references_synced": refs_synced,
     }
@@ -577,6 +585,26 @@ def _package(ctx: _StageContext, sci, header, wht, noise, psf, psf_full) -> None
     }
 
 
+def _package_frames(ctx: _StageContext) -> None:
+    """
+    Opt-in per-exposure frame products (roadmap "Per-exposure frame
+    products") — a packaging mode over the already-calibrated exposures.
+    Runs after _package (driz_cr DQ flags and any tweakreg WCS refinement
+    exist by then) and before eviction can delete the cached frames.
+    """
+    if not ctx.spec.frame_products:
+        return
+    fragment = frames_mod.package_frame_products(
+        ctx.exposures,
+        ctx.spec,
+        ctx.adapter,
+        ctx.out_dir,
+        driz_cr_run=not ctx.record["drizzle"]["single_exposure_branch"],
+    )
+    ctx.record["frames"] = fragment
+    ctx.record["package"]["products"].append("frames/manifest.json")
+
+
 def _evict(cache: cache_mod.ExposureCache, name: str, evict_when_done: bool) -> None:
     cache.mark_completed(name)
     if evict_when_done:
@@ -593,6 +621,13 @@ def reduce_target(
 ) -> Dict:
     """Run the full pipeline for one target; returns the provenance record."""
     adapter = instruments.get(spec.instrument)
+    if spec.frame_products and getattr(adapter, "observatory", None) != "hst":
+        # Fail before any download: the JWST/ground analogues are open
+        # design questions (docs/design/roadmap.md, per-exposure frame
+        # products), not silently-skipped options.
+        raise ValueError(
+            f"frame_products is HST-only (instrument {spec.instrument!r})"
+        )
     cache = cache_mod.ExposureCache(Path(cache_root), size_cap_bytes=size_cap_bytes)
     out_dir = Path(output_root) / spec.name
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -630,6 +665,7 @@ def reduce_target(
     noise = _noise(ctx, sci, wht, exptime)
     psf, psf_full = _psf(ctx, sci, header)
     _package(ctx, sci, header, wht, noise, psf, psf_full)
+    _package_frames(ctx)
     provenance_mod.write_reduction_json(out_dir, ctx.record)
     _evict(ctx.cache, ctx.spec.name, evict_when_done)
 

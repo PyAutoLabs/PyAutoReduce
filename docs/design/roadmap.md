@@ -55,13 +55,18 @@ adapter #1; nothing outside `instruments/` may mention a detector by name.
 
 ## Per-exposure frame products (`_flt`/`_flc` with cosmic rays)
 
-For multi-frame forward modeling (fitting N undrizzled exposures
-simultaneously instead of one mosaic): emit per-exposure cutouts, per-frame
-noise maps (native-pixel Poisson + read noise — no correlated-noise issue),
-per-frame native-pixel PSFs (TinyTim/ePSF, undrizzled), cosmic-ray/DQ masks
-from the drizzle rejection stage, and the inter-frame WCS transforms. The
-drizzle stage already computes everything needed; this is a packaging mode,
-not a new pipeline.
+**Shipped (HST)** as the opt-in `TargetSpec.frame_products` packaging mode —
+per-exposure cutouts, ERR-based native-pixel noise maps, DQ + deepCR
+cosmic-ray masks and the WCS manifest; design in `hst_acs_pipeline.md`
+("Per-exposure frame products"). Open items:
+
+- **Per-frame native-pixel PSFs** (TinyTim/ePSF, undrizzled) — the frames
+  are not fully modeling-ready for PyAutoLens without them.
+- **JWST analogue** — whether/what to emit pre-`calwebb_image3` is a
+  research task (PyAutoMind
+  `research/pyautoreduce/jwst_individual_frame_feasibility.md`).
+- **Per-adapter `dq_bad_bits`** — refinement of the any-nonzero-bit masking
+  policy, if a consumer ever needs to keep e.g. warm-pixel bits.
 
 ## Other instruments / surveys
 

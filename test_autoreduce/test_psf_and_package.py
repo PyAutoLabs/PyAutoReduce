@@ -145,6 +145,10 @@ def test_mast_query_hygiene():
     assert is_direct_observation("j9op01010", "10886")
     assert not is_direct_observation("hst_skycell-p1322x03y02_acs_wfc_f814w_all", "--")
     assert not is_direct_observation("j9op01010", "--")
+    # HAP visit-level associations carry numeric proposals but re-deliver
+    # renamed copies of the member exposures — ingesting them alongside the
+    # direct rows drizzles every exposure twice.
+    assert not is_direct_observation("hst_10886_01_acs_wfc_f814w_j9op01l7", "10886")
 
 
 def test_reject_crowded_matches_reference_loop():

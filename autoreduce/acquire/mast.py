@@ -2,10 +2,13 @@
 MAST acquisition (design doc stage 1).
 
 Query hygiene (spike finding): plain coordinate queries also match HAP
-skycell products, whose member lists re-reference the same exposures many
-times over and pull in neighbouring pointings. We therefore keep only
-*direct* calibration-level observations (numeric proposal IDs, obs_id not a
-``hst_skycell`` product) and optionally filter by proposal, then download the
+products — skycells, whose member lists re-reference the same exposures many
+times over and pull in neighbouring pointings, and visit-level associations,
+whose calibrated products are renamed copies of the member exposures MAST
+already serves directly (ingesting both drizzles every exposure twice; found
+by the frame-products duplicate-ROOTNAME guard). We therefore keep only
+*direct* calibration-level observations (numeric proposal IDs, obs_id not an
+``hst_*`` HAP product) and optionally filter by proposal, then download the
 adapter's calibrated exposure products.
 """
 
@@ -16,8 +19,11 @@ from ..instruments import InstrumentAdapter
 
 
 def is_direct_observation(obs_id: str, proposal_id: str) -> bool:
-    """True for a direct program observation, False for HAP skycell products."""
-    if str(obs_id).startswith("hst_skycell"):
+    """True for a direct program observation, False for HAP products."""
+    # All HAP obs_ids are hst_* — skycells AND visit-level associations.
+    # Visit-level HAP FLCs are renamed copies of the member exposures, so
+    # keeping them alongside the direct rows ingests every exposure twice.
+    if str(obs_id).startswith("hst_"):
         return False
     proposal = str(proposal_id).strip()
     return proposal.isdigit()

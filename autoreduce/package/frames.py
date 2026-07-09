@@ -244,6 +244,7 @@ def package_frame_products(
             return np.zeros(sci.shape, dtype=bool)
 
     entries, skipped = [], []
+    seen_rootnames: Dict[str, str] = {}
     for path in exposures:
         with fits.open(path) as hdul:
             primary = hdul[0].header
@@ -252,6 +253,17 @@ def package_frame_products(
                 .strip()
                 .lower()
             )
+            # One file per exposure is an identity assumption, not a hope:
+            # a repeated ROOTNAME means the same exposure was ingested twice
+            # (e.g. a direct FLC plus its renamed HAP copy) — the mosaic
+            # would be drizzling it twice too. Fail loudly at the source.
+            if rootname in seen_rootnames:
+                raise ValueError(
+                    f"duplicate ROOTNAME {rootname!r}: {seen_rootnames[rootname]} "
+                    f"and {Path(path).name} are the same exposure ingested "
+                    "twice — fix the acquire exposure list"
+                )
+            seen_rootnames[rootname] = Path(path).name
             extvers = [
                 int(hdu.header.get("EXTVER", 1))
                 for hdu in hdul

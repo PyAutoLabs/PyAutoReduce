@@ -26,10 +26,15 @@ class InstrumentAdapter:
     recommended_final_scale: float = 0.05
     # Observatory-level routing (phase 3): which archive/CRDS ecosystem and
     # which combination backend this instrument reduces through.
-    observatory: str = "hst"  # "hst" | "jwst"
+    observatory: str = "hst"  # "hst" | "jwst" | "keck"
     crds_server_url: str = "https://hst-crds.stsci.edu"
-    combine_backend: str = "astrodrizzle"  # "astrodrizzle" | "jwst_image3"
+    combine_backend: str = "astrodrizzle"  # "astrodrizzle" | "jwst_image3" | "nirc2_native"
     mast_obs_collection: str = "HST"
+    # Archive routing (phase 4): which archive the acquire stage queries.
+    # Ground-based instruments (KOA) reduce from raw level-0 frames plus the
+    # night's own calibrations, so they also run the pre-combine ground
+    # stages (calibrate, sky) that space-based level-2 products make moot.
+    archive: str = "mast"  # "mast" | "koa"
 
     def scale_ratio(self, final_scale: float) -> float:
         """s = output scale / native scale, as used by the Casertano factor."""

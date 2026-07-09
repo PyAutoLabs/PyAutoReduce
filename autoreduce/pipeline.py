@@ -42,10 +42,90 @@ class _StageContext:
     work_dir: Path
     record: Dict = field(default_factory=dict)
     exposures: List[Path] = field(default_factory=list)
+    # Ground-based extras (KOA path): calibration/PSF-star frame paths and
+    # the prepared PSF-star products the psf stage consumes.
+    ground: Dict = field(default_factory=dict)
+
+
+def _acquire_koa(ctx: _StageContext) -> None:
+    """
+    KOA acquisition (keck_ao.md stage 1): raw science frames, the night's
+    calibrations, PSF-star frames, and the epoch-matched distortion solution.
+    No footprint filter — NIRC2 observations are pointed and raw-header WCS
+    is approximate; the frame set is pinned by ids/program instead.
+    """
+    from .acquire import koa as koa_mod
+
+    spec, adapter, cache = ctx.spec, ctx.adapter, ctx.cache
+    target_dir = cache.target_dir(spec.name)
+    downloaded = []
+
+    # Each component self-heals independently: a run interrupted after the
+    # science download resumes by fetching only what is missing.
+    exposures = cache.exposures_for(spec.name)
+    if not exposures:
+        science_table = koa_mod.query_science_frames(
+            spec.ra,
+            spec.dec,
+            adapter,
+            spec.filter_name,
+            ctx.work_dir,
+            proposal_ids=spec.proposal_ids,
+            koa_ids=spec.koa_science_ids,
+        )
+        exposures = koa_mod.download_frames(science_table, target_dir, "science")
+        cache.record_download(
+            spec.name, [str(p) for p in exposures], source="koa"
+        )
+        downloaded.append("science")
+    facts = koa_mod.frame_facts_from_headers(exposures)
+
+    cal_paths = sorted((target_dir / "cals").rglob("*.fits*"))
+    if not cal_paths:
+        calib_table = koa_mod.query_night_calibrations(
+            dates=sorted({f["date_obs"] for f in facts}),
+            setups=sorted({(f["itime"], f["coadds"]) for f in facts}),
+            adapter=adapter,
+            filter_name=spec.filter_name,
+            work_dir=ctx.work_dir,
+        )
+        cal_paths = koa_mod.download_frames(calib_table, target_dir, "cals")
+        downloaded.append("cals")
+
+    psf_paths = sorted((target_dir / "psf").rglob("*.fits*"))
+    if spec.koa_psf_star_ids and not psf_paths:
+        star_table = koa_mod.query_science_frames(
+            spec.ra,
+            spec.dec,
+            adapter,
+            spec.filter_name,
+            ctx.work_dir,
+            koa_ids=spec.koa_psf_star_ids,
+        )
+        psf_paths = koa_mod.download_frames(star_table, target_dir, "psf")
+        downloaded.append("psf")
+    distortion_prov = koa_mod.sync_distortion_solution(
+        cache.references_dir, adapter, mjd=facts[0]["mjd"]
+    )
+    ctx.exposures = [f["path"] for f in facts]
+    ctx.ground["cal_paths"] = cal_paths
+    ctx.ground["psf_raw_paths"] = psf_paths
+    ctx.ground["distortion"] = distortion_prov
+    ctx.record["acquire"] = {
+        "n_exposures": len(ctx.exposures),
+        "exposures": [Path(p).name for p in ctx.exposures],
+        "n_calibration_frames": len(cal_paths),
+        "n_psf_star_frames": len(psf_paths),
+        "downloaded": downloaded,
+        **distortion_prov,
+    }
 
 
 def _acquire(ctx: _StageContext) -> None:
     """Download (or reuse) exposures, sync references, footprint-filter."""
+    if ctx.adapter.archive == "koa":
+        _acquire_koa(ctx)
+        return
     spec, adapter, cache = ctx.spec, ctx.adapter, ctx.cache
     crds_mod.configure_environment(cache.references_dir, adapter)
     exposures = cache.exposures_for(spec.name)
@@ -93,10 +173,130 @@ def _acquire(ctx: _StageContext) -> None:
 
 
 def _align(ctx: _StageContext) -> None:
+    if ctx.adapter.observatory == "keck":
+        # Raw NIRC2 header WCS is approximate; relative registration is
+        # phase cross-correlation inside the nirc2_native combine.
+        ctx.record["align"] = {
+            "wcs_solutions": "raw NIRC2 headers (approximate)",
+            "method": "phase cross-correlation at combine",
+        }
+        return
     ctx.record["align"] = {
         "wcs_solutions": align_mod.wcs_solution_names(ctx.exposures),
         "tweakreg_run": False,  # a-priori WCS accepted by default (stage 2)
     }
+
+
+def _prepare_keck_frames(
+    ctx: _StageContext, raw_paths, calib, sky_window: int, tag: str
+):
+    """Calibrate + sky-subtract one raw frame set; write prepared FITS."""
+    from astropy.io import fits
+
+    from .acquire import koa as koa_mod
+    from .calibrate import calibrate_frame
+    from .instruments.nirc2 import NIRC2_DETECTOR
+    from .sky import running_sky_subtract
+
+    facts = koa_mod.frame_facts_from_headers(raw_paths)
+    frames = [
+        calibrate_frame(
+            fits.getdata(f["path"]).astype(float),
+            calib,
+            NIRC2_DETECTOR.gain_e_per_dn,
+            f["coadds"],
+        )
+        for f in facts
+    ]
+    if len(frames) >= 2:
+        subtracted, sky_prov = running_sky_subtract(
+            frames, window=min(sky_window, len(frames) - 1)
+        )
+    else:
+        # Single-frame set (short PSF-star visits): its own sigma-clipped
+        # median is the only sky estimate available — recorded, never silent.
+        from astropy.stats import sigma_clipped_stats
+
+        level, _, _ = sigma_clipped_stats(frames[0][np.isfinite(frames[0])])
+        subtracted = [frames[0] - level]
+        sky_prov = {
+            "recipe": "single frame: own sigma-clipped median",
+            "sky_levels_e": [float(level)],
+        }
+
+    prepared_dir = ctx.work_dir / f"prepared_{tag}"
+    prepared_dir.mkdir(parents=True, exist_ok=True)
+    distortion = ctx.ground["distortion"]
+    prepared_paths, mjds = [], []
+    for fact, frame, sky_level in zip(
+        facts, subtracted, sky_prov["sky_levels_e"]
+    ):
+        header = fits.Header()
+        header["ITIME"] = fact["itime"]
+        header["COADDS"] = fact["coadds"]
+        header["MJD-OBS"] = fact["mjd"]
+        header["SAMPMODE"] = fact["sampmode"]
+        header["MULTISAM"] = fact["multisam"]
+        header["SKYLEV"] = sky_level
+        header["DISTX"] = distortion["distortion_paths"][0]
+        header["DISTY"] = distortion["distortion_paths"][1]
+        header["BUNIT"] = "ELECTRONS"
+        out_path = prepared_dir / f"{fact['path'].stem}_prep.fits"
+        fits.PrimaryHDU(frame.astype(np.float32), header=header).writeto(
+            out_path, overwrite=True
+        )
+        prepared_paths.append(out_path)
+        mjds.append(fact["mjd"])
+    return prepared_paths, mjds, sky_prov
+
+
+def _ground_prepare(ctx: _StageContext) -> None:
+    """The ground-based pre-combine stages (keck_ao.md stages 2-3)."""
+    if ctx.adapter.observatory != "keck":
+        return
+    from .acquire import koa as koa_mod
+    from .calibrate import build_calibrations, load_calibration_sets
+    from .instruments.nirc2 import NIRC2_DETECTOR
+
+    facts = koa_mod.frame_facts_from_headers(ctx.exposures)
+    setups = {(f["itime"], f["coadds"]) for f in facts}
+    if len(setups) != 1:
+        raise ValueError(
+            f"science frames span {len(setups)} ITIME/COADDS setups "
+            f"({sorted(setups)}); reduce one setup per target spec"
+        )
+    itime, coadds = setups.pop()
+    darks, flat_on, flat_off = load_calibration_sets(
+        ctx.ground["cal_paths"], science_itime=itime, science_coadds=coadds
+    )
+    calib = build_calibrations(darks, flat_on, flat_off)
+    ctx.record["calibrate"] = {
+        "gain_e_per_dn": NIRC2_DETECTOR.gain_e_per_dn,
+        **calib.provenance,
+    }
+
+    prepared, _, sky_prov = _prepare_keck_frames(
+        ctx, ctx.exposures, calib, ctx.spec.sky_window, tag="science"
+    )
+    ctx.exposures = prepared
+    ctx.record["sky"] = sky_prov
+
+    if ctx.ground.get("psf_raw_paths"):
+        import dataclasses
+
+        # PSF-star visits use their own (shorter) ITIME; the science-matched
+        # master dark does not apply — the running sky carries their dark.
+        star_calib = dataclasses.replace(calib, master_dark=None)
+        star_prepared, star_mjds, star_sky_prov = _prepare_keck_frames(
+            ctx,
+            ctx.ground["psf_raw_paths"],
+            star_calib,
+            ctx.spec.sky_window,
+            tag="psfstar",
+        )
+        ctx.ground["psf_prepared"] = star_prepared
+        ctx.ground["psf_mjds"] = star_mjds
+        ctx.record["sky"]["psf_star_sky"] = star_sky_prov
 
 
 def _combine(ctx: _StageContext):
@@ -165,6 +365,28 @@ def _psf(ctx: _StageContext, sci, header):
     from astropy.wcs import WCS
 
     spec, adapter = ctx.spec, ctx.adapter
+    if adapter.observatory == "keck" and ctx.ground.get("psf_prepared"):
+        # Tier A (keck_ao.md stage 6): PSF-star epochs reduced
+        # pipeline-identically; every epoch ships as a candidate.
+        from .psf import nirc2_star
+
+        psf, psf_full, candidates, diag = nirc2_star.build_candidates(
+            ctx.ground["psf_prepared"],
+            ctx.ground["psf_mjds"],
+            spec,
+            adapter,
+            ctx.work_dir,
+        )
+        # Clear candidates from any previous run first — a re-run with fewer
+        # surviving epochs must not leave stale kernels behind.
+        for stale in ctx.out_dir.glob("psf_candidate_*.fits"):
+            stale.unlink()
+        for i, candidate in enumerate(candidates):
+            fits.PrimaryHDU(candidate.astype(np.float32)).writeto(
+                ctx.out_dir / f"psf_candidate_{i}.fits", overwrite=True
+            )
+        ctx.record["psf"] = diag
+        return psf, psf_full
     target_xy = WCS(header).world_to_pixel_values(spec.ra, spec.dec)
     selection = stars_mod.StarSelection()
     if adapter.observatory == "hst":
@@ -197,6 +419,10 @@ def _psf(ctx: _StageContext, sci, header):
     psf, psf_full, psf_diag = epsf_mod.build_epsf(
         sci, stars, spec.psf_shape, spec.psf_full_shape
     )
+    if adapter.observatory == "keck":
+        # Tier B: in-field ePSF. Usable, but an AO PSF from field stars at a
+        # different anisoplanatic angle is still provisional by contract.
+        psf_diag = {"psf_provisional": True, **psf_diag}
     ctx.record["psf"] = psf_diag
     return psf, psf_full
 
@@ -282,6 +508,7 @@ def reduce_target(
 
     _acquire(ctx)
     _align(ctx)
+    _ground_prepare(ctx)
     sci, header, wht, exptime = _combine(ctx)
     noise = _noise(ctx, sci, wht, exptime)
     psf, psf_full = _psf(ctx, sci, header)

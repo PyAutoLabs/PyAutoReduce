@@ -30,6 +30,17 @@ adapter #1; nothing outside `instruments/` may mention a detector by name.
   bands, against the autolens_assistant demo dataset.
 - PSF: STPSF tier-2 back-end still open (tier-1 ePSF carries over).
 
+## Keck NIRC2 AO — **in progress (phase 4, PyAutoReduce#11)**
+
+- Design deltas live in [`keck_ao.md`](keck_ao.md); adapters `nirc2_narrow` /
+  `nirc2_wide`, the acquire-backend seam (`archive: koa | mast`, PyKOA), the
+  ground pre-combine stages (`calibrate`, `sky`), the `nirc2_native` combine
+  backend (distortion-as-drizzle-pixmap), and the provisional-PSF contract
+  (tier-A PSF-star candidates) implemented. SHARP-grounded (Lagattuta 2012;
+  Chen 2016/2019); validation anchor B1938+666.
+- Open: wide-camera distortion, subarrays, MULTISAM read noise, north-up
+  resampling (see keck_ao.md open items).
+
 ## Per-exposure frame products (`_flt`/`_flc` with cosmic rays)
 
 For multi-frame forward modeling (fitting N undrizzled exposures

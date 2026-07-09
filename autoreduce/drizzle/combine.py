@@ -55,6 +55,10 @@ def combine(
         from . import jwst_combine
 
         return jwst_combine.combine(exposures, spec, adapter, output_dir)
+    if adapter.combine_backend == "nirc2_native":
+        from . import nirc2_combine
+
+        return nirc2_combine.combine(exposures, spec, adapter, output_dir)
     if adapter.combine_backend != "astrodrizzle":
         raise ValueError(
             f"unknown combine backend {adapter.combine_backend!r} "

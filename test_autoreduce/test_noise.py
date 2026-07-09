@@ -139,7 +139,8 @@ class TestBadPixelPolicy:
         from autoreduce.noise.rms import mask_isolated_bad_pixels
 
         data, noise = self._pair()
-        noise[:8, :8] = 0.0  # 64 px = 0.64% > 0.5%
+        # 100 isolated singletons on a grid: 1% > 0.5%, no clustering.
+        noise[::10, ::10] = 0.0
         with pytest.raises(ValueError, match="policy limit"):
             mask_isolated_bad_pixels(data, noise, (50.0, 50.0), 0.06)
 

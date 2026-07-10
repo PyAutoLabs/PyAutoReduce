@@ -327,6 +327,23 @@ Design decisions:
   `target_pixel` — the target projected through the *full* distortion model
   — as the exact per-frame registration anchor. Frame-to-frame mapping is
   `WCS_j^-1 ∘ WCS_i`; no bespoke transform format.
+- **Registration accuracy (issue #19)** — every frame's manifest entry
+  carries a `registration` block: the astrometric solution behind its WCS
+  (`wcsname`/`wcstype` + `RMS_RA`/`RMS_DEC`/`NMATCHES`, which state the
+  group's *absolute* catalog alignment — for slacs0008, `FIT_REL_GSC242` at
+  ~44 mas), and the *measured relative* residual against the reference frame
+  (resample through both shipped WCS, phase-correlate; whitened correlation
+  is the CR-hole-robust estimator). Measured on slacs0008: relative
+  registration ≲ 0.1 native px, with the measurement itself limited to
+  ~0.1–0.3 px where CR-masked pixels bite the source (three estimators —
+  whitened, plain correlation, masked centroid — disagree at exactly that
+  level). **Modeling stance:** the shifts ship as *information, not
+  policy* — the default is treating them as known (residuals sit below the
+  scales standard modeling constrains); precision applications free
+  per-frame `(dy, dx)` nuisance parameters with Gaussian priors of the
+  recorded residual width, which also absorbs the SIP-serialization term.
+  `max_registration_residual_px` in `reduction.json` gives the at-a-glance
+  verdict per dataset.
 - **Caveats recorded in the manifest** — single-exposure reductions carry no
   driz_cr flags (`driz_cr_run: false` + note: the deepCR mask is then the
   only CR rejection); re-runs clear `frames/` first so a smaller exposure

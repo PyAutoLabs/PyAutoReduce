@@ -209,7 +209,76 @@ def _package_one_chip(
         "n_masked_pixels": int(bad.sum()),
         "n_cr_pixels": int(cr_mask.sum()),
         "offchip_fraction": float(offchip.mean()),
+        # The astrometric solution behind this frame's WCS. The RMS/NMATCHES
+        # keywords state the *group's absolute* alignment to the external
+        # catalog; the frame-to-frame relative residual modeling consumes is
+        # measured separately (see _relative_registration).
+        "registration": {
+            "wcsname": str(hdr.get("WCSNAME", "unknown")),
+            "wcstype": str(hdr.get("WCSTYPE", "unknown")),
+            "rms_ra_mas": float(hdr["RMS_RA"]) if "RMS_RA" in hdr else None,
+            "rms_dec_mas": float(hdr["RMS_DEC"]) if "RMS_DEC" in hdr else None,
+            "nmatches": int(hdr["NMATCHES"]) if "NMATCHES" in hdr else None,
+        },
     }
+
+
+def _relative_registration(frames_dir: Path, entries: List[Dict]) -> None:
+    """
+    Measure every frame's registration residual against the first written
+    frame and record it in each entry's ``registration`` block.
+
+    The residual is what a multi-frame modeler actually needs to know: each
+    frame is resampled onto the reference frame's pixel grid through *both*
+    shipped cutout WCS (a perfect WCS pair leaves zero shift) and the
+    remaining offset is phase-correlated. It bounds the error of treating
+    the inter-exposure shifts as perfectly known — including the SIP-only
+    serialization term the manifest's WCS note describes. The header
+    RMS_RA/RMS_DEC record the group's absolute catalog alignment instead,
+    which is not the modeling-relevant quantity (issue #19).
+    """
+    from astropy.io import fits
+    from astropy.wcs import WCS
+    from scipy.ndimage import map_coordinates
+
+    from ..align.registration import phase_offset
+
+    ref_entry = entries[0]
+    with fits.open(frames_dir / ref_entry["dir"] / "data.fits") as hdul:
+        ref = hdul[0].data.astype(float)
+        ref_wcs = WCS(hdul[0].header)
+    ny, nx = ref.shape
+    yy, xx = np.mgrid[0:ny, 0:nx]
+    ra, dec = ref_wcs.pixel_to_world_values(xx, yy)
+
+    # The resample's boundary blends toward cval at the cutout border; a
+    # trimmed margin keeps the correlation locked on source structure
+    # rather than border artifacts (which dominate on flat backgrounds).
+    margin = 2
+
+    ref_entry["registration"]["reference"] = None
+    ref_entry["registration"]["residual_dy_px"] = 0.0
+    ref_entry["registration"]["residual_dx_px"] = 0.0
+    for entry in entries[1:]:
+        with fits.open(frames_dir / entry["dir"] / "data.fits") as hdul:
+            data = hdul[0].data.astype(float)
+            wcs = WCS(hdul[0].header)
+        xk, yk = wcs.world_to_pixel_values(ra, dec)
+        resampled = map_coordinates(
+            data, [yk, xk], order=1, mode="constant", cval=0.0
+        )
+        # whiten=True: on real (noisy) frames phase correlation is the
+        # hole-robust estimator — the per-frame CR masks punch different
+        # zeros into each cutout, which bias plain correlation and centroids
+        # by ~0.2-0.3 px but hit the whitened phase spectrum incoherently
+        # (measured on slacs0008, issue #19).
+        dy, dx = phase_offset(
+            ref[margin:-margin, margin:-margin],
+            resampled[margin:-margin, margin:-margin],
+        )
+        entry["registration"]["reference"] = ref_entry["dir"]
+        entry["registration"]["residual_dy_px"] = float(dy)
+        entry["registration"]["residual_dx_px"] = float(dx)
 
 
 def package_frame_products(
@@ -292,6 +361,17 @@ def package_frame_products(
             f"covering {spec.name} — footprint/cutout geometry bug"
         )
 
+    _relative_registration(frames_dir, entries)
+    max_residual = max(
+        float(
+            np.hypot(
+                e["registration"]["residual_dy_px"],
+                e["registration"]["residual_dx_px"],
+            )
+        )
+        for e in entries
+    )
+
     manifest = {
         "version": MANIFEST_VERSION,
         "target": {"name": spec.name, "ra": spec.ra, "dec": spec.dec},
@@ -326,11 +406,40 @@ def package_frame_products(
             "not FITS-serializable (~0.1 px residual); target_pixel is "
             "computed through the full distortion model"
         ),
+        "registration_note": (
+            "per-frame registration block: wcsname/wcstype/rms/nmatches state "
+            "the group's ABSOLUTE catalog alignment; residual_dy_px/"
+            "residual_dx_px are the measured frame-to-frame RELATIVE "
+            "registration errors through the shipped cutout WCS (phase "
+            "correlation vs the reference frame) — the quantity multi-frame "
+            "modeling consumes. The measurement itself is limited to "
+            "~0.1-0.3 px where CR-masked pixels bite the source, so sub-0.1 "
+            "px values are consistent with zero. Treating shifts as "
+            "known-perfect is safe when these residuals are far below the "
+            "modeling scale; otherwise free per-frame (dy, dx) with priors "
+            "of this width"
+        ),
+        "max_registration_residual_px": max_residual,
         "frames": entries,
         "skipped_chips": skipped,
     }
     with open(frames_dir / "manifest.json", "w") as f:
         json.dump(manifest, f, indent=2)
+
+    # Deliberately loud for now (user request, issue #19): the registration
+    # story is easy to forget and the header RMS keywords invite misreading.
+    print(
+        f"[frames] inter-exposure registration ({spec.name}): max relative "
+        f"residual {max_residual:.3f} native px across {len(entries)} chips. "
+        "Measurement floor is ~0.1-0.3 px where CR-masked pixels bite the "
+        "source — sub-0.1 px values are consistent with zero. NOTE: the "
+        "header RMS_RA/RMS_DEC keywords state the group's ABSOLUTE catalog "
+        "alignment (slacs0008: GSC-2.4.2, ~44 mas), NOT this relative "
+        "number — the relative registration is measured, and lives in "
+        "frames/manifest.json 'registration' per frame. Default stance: "
+        "shifts are known; free per-frame (dy, dx) with priors of the "
+        "recorded width for precision work."
+    )
 
     return {
         "n_exposures": len(exposures),
@@ -339,5 +448,6 @@ def package_frame_products(
         "driz_cr_run": bool(driz_cr_run),
         "cr_method": cr_method,
         "data_units": "ELECTRONS/S",
+        "max_registration_residual_px": max_residual,
         "manifest": "frames/manifest.json",
     }

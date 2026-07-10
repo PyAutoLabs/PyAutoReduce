@@ -480,6 +480,17 @@ def _psf(ctx: _StageContext, sci, header):
             )
         ctx.record["psf"] = diag
         return psf, psf_full
+    if spec.psf_from_frames:
+        # The alternative mosaic PSF: combine the per-frame tier-1 ePSFs
+        # through each frame's drizzle geometry instead of measuring stars
+        # on the resampled mosaic (issue #21).
+        from .psf import frame_combine as frame_combine_mod
+
+        psf, psf_full, diag = frame_combine_mod.combined_mosaic_psf(
+            ctx.exposures, spec, adapter, header
+        )
+        ctx.record["psf"] = diag
+        return psf, psf_full
     target_xy = WCS(header).world_to_pixel_values(spec.ra, spec.dec)
     selection = stars_mod.StarSelection()
     if adapter.observatory == "hst":
@@ -621,12 +632,15 @@ def reduce_target(
 ) -> Dict:
     """Run the full pipeline for one target; returns the provenance record."""
     adapter = instruments.get(spec.instrument)
-    if spec.frame_products and getattr(adapter, "observatory", None) != "hst":
+    if (spec.frame_products or spec.psf_from_frames) and getattr(
+        adapter, "observatory", None
+    ) != "hst":
         # Fail before any download: the JWST/ground analogues are open
         # design questions (docs/design/roadmap.md, per-exposure frame
         # products), not silently-skipped options.
         raise ValueError(
-            f"frame_products is HST-only (instrument {spec.instrument!r})"
+            "frame_products / psf_from_frames are HST-only "
+            f"(instrument {spec.instrument!r})"
         )
     cache = cache_mod.ExposureCache(Path(cache_root), size_cap_bytes=size_cap_bytes)
     out_dir = Path(output_root) / spec.name

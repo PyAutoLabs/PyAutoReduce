@@ -46,6 +46,12 @@ class TargetSpec:
     # off by default — deepCR per-frame cosmic-ray masking is slow.
     frame_products: bool = False
 
+    # Build the mosaic psf.fits from the per-frame tier-1 ePSFs (drop-
+    # convolved, resampled through each frame's geometry, exptime-weighted)
+    # instead of estimating on the drizzled mosaic. HST-only; independent of
+    # frame_products (the frame ePSFs are built either way).
+    psf_from_frames: bool = False
+
     # Alignment: residual (pixels) above which TweakReg refinement triggers.
     alignment_tolerance_pix: float = 0.1
 

@@ -69,6 +69,99 @@ ratios against the demo products (the SLACS-parity method).
 Phase 3 ships tier 1; tiers 2/2b are the follow-up (PSFEx/ShOpt are external
 binaries/Julia — an integration decision for a dedicated prompt).
 
+## Per-exposure frame products — feasibility (issue #24, 2026-07-10)
+
+Whether the HST frames → registration → PSF chain (issues #16/#19/#21)
+should and can extend to JWST. **Verdict: GO, phased** — technically
+feasible with modest deltas; scientifically justified specifically for the
+undersampled SW bands and precision applications, with mosaics remaining
+the default for routine extended-source work. Implementation is a follow-up
+feature prompt, not this note.
+
+### Should — what the literature and instrument design say
+
+**For frame-level modeling:**
+
+- **SW undersampling is the strongest argument.** NIRCam SW (native
+  0.031″/px) undersamples its PSF (F115W FWHM ≈ 0.04″ ≈ 1.3 px); STScI's
+  subpixel dither patterns exist precisely to recover that information, and
+  a resampled mosaic partially destroys it (aliasing + interpolation).
+  Forward-modeling the dithered frames uses the sub-pixel phases directly —
+  the information-preserving approach.
+- **Precision shear is moving frame-level.** The Roman HLIS metacalibration
+  study (Yamamoto et al. 2022, arXiv:2203.08845) benchmarks joint
+  multi-epoch (single-exposure) measurement against coadds — multi-epoch
+  avoids coadd-PSF discontinuities and correlated noise and performed
+  better (m = −0.76 ± 0.43% vs −1.13 ± 0.60%). The same argument applies
+  to any shear-grade or substructure-grade lens measurement with NIRCam.
+- **Frame-level is standard practice in crowded-field photometry and
+  astrometry** (DOLPHOT's JWST module; the Anderson ePSF lineage) — the
+  machinery culture exists, just not yet for extended-source fitting.
+- **Resample correlates noise exactly as drizzle does** (this design's own
+  noise stage applies the same Casertano R) — per-frame fitting removes the
+  correlated-noise approximation entirely.
+
+**Against / tempering:**
+
+- Published JWST extended-source practice is mosaic-based today: COSMOS-Web
+  weak lensing (ShOpt on mosaics), AGN decomposition (mosaic star
+  libraries), deep-field galaxy-formation morphology. The scan found no
+  published per-frame forward modeling of galaxy/lens sources with JWST —
+  this would be ahead of the field, not following it.
+- **Frame-level artifacts arrive unmitigated**: 1/f striping, wisps and
+  snowballs are corrected (when they are) by mosaic-pipeline steps or team
+  pipelines; per-frame modeling inherits them raw. The manifest must carry
+  this caveat; the COSMOS-Web parity note above already flags the same gap
+  for our mosaics.
+- LW bands are well-sampled — little sampling gain there (the correlated
+  noise and per-frame PSF arguments still apply).
+
+### Can — deltas vs the HST frames mode
+
+Anatomy is compatible: `_cal` files carry SCI/ERR/DQ (one detector per
+file, so the existing per-(exposure, SCI-EXTVER) loop degenerates cleanly),
+ramp-jump cosmic-ray flags are already in DQ from stage 1, and the
+footprint/registration/PSF machinery is geometry-agnostic. The deltas:
+
+1. **Input products** — package the `_crf` outputs of calwebb_image3
+   (outlier-flagged, tweakreg-updated cal files; needs
+   `steps={"outlier_detection": {"save_results": True}}` + capturing the
+   paths in drizzle provenance) so frames carry the stack-based outlier
+   flags, exactly as HST frames carry driz_cr flags. Fall back to `_cal`
+   with a recorded absence when image3 didn't run.
+2. **Units** — keep native MJy/sr (defaults-first, matches the mosaic):
+   `_units_to_cps` gains a surface-brightness branch that records
+   "none (native MJy/sr)" instead of raising.
+3. **Sky** — no `MDRIZSKY`; skymatch's per-image levels live in the
+   datamodel meta (`BKGLEVEL` on `_crf`). Subtract when present + record,
+   0.0 recorded otherwise — mirroring the HST convention.
+4. **CR provenance** — deepCR has no JWST model and isn't needed:
+   `cr_method = "ramp-jump (calwebb stage 1) + image3 outlier_detection
+   (crf)"`; `dq_semantics` switches to the JWST DQ flag table.
+5. **WCS** — cal/crf carry gwcs (ASDF) plus the FITS-approx SIP the
+   footprint filter already uses; the cutout ships the SIP approximation
+   with its fidelity recorded, and the `target_pixel` anchor should project
+   through gwcs where available. The measured relative-registration block
+   carries over unchanged (it is empirical); the absolute-solution keywords
+   (`RMS_RA`/`RMS_DEC`) have no cal-header equivalent — record the tweakreg
+   fit metadata or "unknown".
+6. **Per-frame ePSF** — machinery carries over with `peak_max=None` (the
+   established convention for surface-brightness units); STPSF is the
+   tier-2b fallback (per-detector, per-position — a stronger story than
+   HST's TinyTim). Note: a single frame's ePSF is itself undersampled at
+   SW; the `psf_from_frames` combination across subpixel dithers is where
+   the sampling recovery actually happens.
+7. **Guard** — relax the `frame_products`/`psf_from_frames` HST-only check
+   to `observatory in ("hst", "jwst")` once the branch above lands.
+
+### Recommendation
+
+File the implementation as `feature/pyautoreduce/jwst_frame_products.md`
+once accepted, scoped to the deltas above with the COSMOS-Web ring
+(4 bands, SW + LW) as the validation anchor — it exercises undersampled SW
+and well-sampled LW in one dataset. Frame-level artifacts (1/f, wisps)
+ship as recorded caveats, not blockers.
+
 ## Open items
 
 - Tier-2 spatially-varying PSF back-end (PSFEx or ShOpt — see table above);

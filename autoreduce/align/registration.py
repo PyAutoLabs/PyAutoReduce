@@ -14,8 +14,18 @@ from typing import List, Tuple
 import numpy as np
 
 
-def phase_offset(reference: np.ndarray, frame: np.ndarray) -> Tuple[float, float]:
-    """(dy, dx) such that shifting `frame` by it aligns it to `reference`."""
+def phase_offset(
+    reference: np.ndarray, frame: np.ndarray, whiten: bool = True
+) -> Tuple[float, float]:
+    """(dy, dx) such that shifting `frame` by it aligns it to `reference`.
+
+    ``whiten=True`` (the default) is phase correlation proper — the sharp,
+    contrast-independent peak that noisy star fields need (the Keck path).
+    For smooth, nearly noise-free structure (e.g. frame-products cutouts of
+    one galaxy) whitening amplifies the empty high frequencies into ringing
+    whose sidelobes can beat the true peak — pass ``whiten=False`` there to
+    correlate the structure directly.
+    """
     if reference.shape != frame.shape:
         raise ValueError(
             f"shape mismatch: {reference.shape} vs {frame.shape}"
@@ -27,9 +37,11 @@ def phase_offset(reference: np.ndarray, frame: np.ndarray) -> Tuple[float, float
     fa = np.fft.rfft2(a)
     fb = np.fft.rfft2(b)
     cross = fa * np.conj(fb)
-    norm = np.abs(cross)
-    norm[norm == 0.0] = 1.0
-    corr = np.fft.irfft2(cross / norm, s=reference.shape)
+    if whiten:
+        norm = np.abs(cross)
+        norm[norm == 0.0] = 1.0
+        cross = cross / norm
+    corr = np.fft.irfft2(cross, s=reference.shape)
 
     peak = np.unravel_index(np.argmax(corr), corr.shape)
     dy, dx = float(peak[0]), float(peak[1])

@@ -420,3 +420,117 @@ class TestSpecField:
         spec = TargetSpec.from_yaml(path)
         assert spec.frame_products is True
         assert spec.as_dict()["frame_products"] is True
+
+
+def _paint_blob(hdul, chip, ra, dec, sigma=3.0, amp=200.0, offset_px=(0.0, 0.0)):
+    """Add a Gaussian blob at sky position (ra, dec) via the chip's own WCS,
+    optionally offset in pixels to simulate data misregistered vs its WCS."""
+    from astropy.wcs import WCS
+
+    sci = hdul["SCI", chip].data
+    x, y = WCS(hdul["SCI", chip].header).world_to_pixel_values(ra, dec)
+    y = float(y) + offset_px[0]
+    x = float(x) + offset_px[1]
+    yy, xx = np.mgrid[0 : sci.shape[0], 0 : sci.shape[1]]
+    sci += amp * np.exp(-(((yy - y) ** 2 + (xx - x) ** 2) / (2.0 * sigma**2)))
+
+
+class TestRegistration:
+    def _dithered_pair(self, tmp_path, offset_px=(0.0, 0.0)):
+        """Two 1-chip exposures of the same sky blob; the second is dithered
+        by (3, 2) whole pixels, which its WCS records exactly. offset_px
+        additionally shifts the second frame's *data* relative to what its
+        WCS claims (a registration error)."""
+        paths = []
+        for name, crpix_shift, off in (
+            ("j8aaaaaaq_flc.fits", (0.0, 0.0), (0.0, 0.0)),
+            ("j8bbbbbbq_flc.fits", (3.0, 2.0), offset_px),
+        ):
+            # sci == MDRIZSKY: zero background after sky subtraction, like a
+            # real sky-subtracted frame; the noise floor is REQUIRED — phase
+            # correlation whitens the spectrum, and a noise-free synthetic
+            # image turns the empty high frequencies into ringing sidelobes
+            # no real frame has.
+            hdul = _frame_hdul(nchips=1, sci_value=40.0)
+            hdul[0].header["ROOTNAME"] = name.split("_")[0]
+            hdr = hdul["SCI", 1].header
+            hdr["CRPIX1"] += crpix_shift[1]
+            hdr["CRPIX2"] += crpix_shift[0]
+            # A constellation, not one smooth blob: phase correlation needs
+            # coherent power across many Fourier modes, which real lens
+            # cutouts (galaxy + arcs + neighbours) have and a single
+            # Gaussian does not.
+            arcsec = 1.0 / 3600.0
+            for dra, ddec, sigma, amp in (
+                (0.0, 0.0, 3.0, 300.0),
+                (0.4 * arcsec, 0.3 * arcsec, 1.5, 250.0),
+                (-0.5 * arcsec, 0.2 * arcsec, 1.0, 200.0),
+                (0.2 * arcsec, -0.6 * arcsec, 2.0, 150.0),
+                (-0.3 * arcsec, -0.4 * arcsec, 1.2, 220.0),
+            ):
+                _paint_blob(
+                    hdul, 1, RA + dra, DEC + ddec, sigma=sigma, amp=amp,
+                    offset_px=off,
+                )
+            # Independent noise per frame — a shared field would itself
+            # correlate and drag the measurement to the dither offset.
+            rng = np.random.default_rng(len(paths))
+            hdul["SCI", 1].data += rng.normal(0.0, 2.0, hdul["SCI", 1].data.shape)
+            path = tmp_path / name
+            hdul.writeto(path)
+            paths.append(path)
+        return paths
+
+    def test_registered_frames_have_near_zero_residual(self, no_cr, tmp_path):
+        _run(tmp_path, self._dithered_pair(tmp_path))
+        manifest = _manifest(tmp_path)
+        ref, other = manifest["frames"]
+        assert ref["registration"]["reference"] is None
+        assert other["registration"]["reference"] == ref["dir"]
+        assert abs(other["registration"]["residual_dy_px"]) < 0.05
+        assert abs(other["registration"]["residual_dx_px"]) < 0.05
+        assert manifest["max_registration_residual_px"] < 0.05
+
+    def test_misregistered_frame_residual_is_recovered(self, no_cr, tmp_path):
+        # Second frame's data sits 2 px off in y from what its WCS claims —
+        # a genuine registration error the manifest must report. (An integer
+        # injection: the estimator's sub-pixel fidelity is ~0.1-0.3 px by
+        # design, as the manifest's registration_note records.)
+        _run(tmp_path, self._dithered_pair(tmp_path, offset_px=(2.0, 0.0)))
+        manifest = _manifest(tmp_path)
+        other = manifest["frames"][1]
+        assert abs(abs(other["registration"]["residual_dy_px"]) - 2.0) < 0.15
+        assert abs(other["registration"]["residual_dx_px"]) < 0.15
+        assert manifest["max_registration_residual_px"] == pytest.approx(
+            np.hypot(
+                other["registration"]["residual_dy_px"],
+                other["registration"]["residual_dx_px"],
+            )
+        )
+
+    def test_registration_notice_printed(self, no_cr, tmp_path, capsys):
+        # Deliberately loud during use (user request, issue #19) — pin it so
+        # it isn't silently dropped until deliberately retired.
+        _run(tmp_path, self._dithered_pair(tmp_path))
+        out = capsys.readouterr().out
+        assert "[frames] inter-exposure registration" in out
+        assert "ABSOLUTE catalog alignment" in out
+        assert "max relative residual" in out
+
+    def test_header_solution_recorded(self, no_cr, tmp_path):
+        path = tmp_path / "j8ccccccq_flc.fits"
+        hdul = _frame_hdul(nchips=1)
+        hdr = hdul["SCI", 1].header
+        hdr["WCSNAME"] = "IDC_x-FIT_REL_GSC242"
+        hdr["WCSTYPE"] = "undistorted a posteriori solution relatively aligned to GSC242"
+        hdr["RMS_RA"] = 44.5
+        hdr["RMS_DEC"] = 42.0
+        hdr["NMATCHES"] = 30
+        _paint_blob(hdul, 1, RA, DEC)
+        hdul.writeto(path)
+        _run(tmp_path, [path])
+        reg = _manifest(tmp_path)["frames"][0]["registration"]
+        assert reg["wcsname"] == "IDC_x-FIT_REL_GSC242"
+        assert reg["rms_ra_mas"] == pytest.approx(44.5)
+        assert reg["nmatches"] == 30
+        assert reg["residual_dy_px"] == 0.0 and reg["reference"] is None

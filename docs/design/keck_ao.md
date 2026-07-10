@@ -66,6 +66,84 @@ exists to diff, so the acceptance bar is the JWST-phase precedent —
 Driver: `prototypes/b1938_keck_spike.py` (KOA query + reduction + checks 1-2);
 checks 3-4 complete after the first reduced dataset lands.
 
+## Per-exposure frame products — feasibility (issue #31, 2026-07-10)
+
+Whether the frame-products chain (HST #16/#19/#21, JWST #27/#29) extends to
+NIRC2. **Verdict: GO in principle — the strongest science case of the three
+observatories — but GATED on the acceptance checks (#13) completing**: the
+stack-level pipeline should be accepted (θ_E parity, plate-scale fix)
+before a per-frame mode builds on it.
+
+### Should — the AO case is the strongest one
+
+- **The AO PSF varies frame to frame** (seeing, correction quality) — this
+  is THE dominant systematic in AO lens modelling, to which SHARP III
+  (Chen et al. 2016) devotes itself. Co-adding marries mismatched PSFs
+  under one kernel; per-frame modelling pairs each frame with its
+  temporally-nearest PSF epoch, and evidence-based PSF selection (SHARP I
+  practice, already the tier-A design here) extends naturally from
+  "pick one epoch for the stack" to "match epochs per frame".
+- Frame-selection/lucky-imaging heritage: ground-based NIR practice
+  already treats frames as individuals worth weighing, not just stacking.
+- The B1938+666 SHARP validation dataset and in-flight acceptance fits
+  (#13) provide the natural first target.
+- Tempering: per-frame SNR is low (single ~60 s AO frames of a faint
+  ring); fitting epochs/subsets rather than all ~39 frames individually is
+  the realistic granularity. And the stack already dilutes CRs that a
+  single frame carries unflagged (see deltas).
+
+### Can — the seam is different but real
+
+Unlike HST/JWST there are no archive-calibrated per-frame files — but the
+pipeline's own ground stages already produce **prepared frames on disk in
+the work dir** (calibrated to e-, running-sky-subtracted, bad pixels as
+NaN) before `nirc2_native` combines them. The packaging seam consumes
+those, not `_flc`/`_crf` analogues. Deltas:
+
+1. **Registration inverts.** NIRC2 header WCS is arcsecond-grade; the
+   measured `offsets_to_reference` (phase cross-correlation inside the
+   combine) ARE the registration truth. The manifest ships offsets (+ the
+   sub-pixel accuracy of the correlation) instead of per-frame WCS +
+   residuals; today the offsets are computed but **not serialized to
+   provenance** — recording them is the first delta, useful to the stack
+   provenance regardless of frame products.
+2. **Native frames are distorted** — products would live in raw detector
+   pixels, with the epoch-matched distortion solution (Yelda/Service
+   lookup tables, already synced + checksummed in `references/keck`)
+   shipped by reference in the manifest. Across a ~10" science cutout the
+   differential distortion is small but must be quantified, not assumed.
+3. **Per-frame noise is constructed, not read** — no ERR extensions; the
+   same detector model the combine weights use (sky + dark + RN²·coadds
+   per frame, MCDS-aware) yields a per-frame noise map: flat background
+   variance + source Poisson. Consistent with the ground philosophy —
+   every term is already computed per frame for the IVM weights.
+4. **Per-frame cosmic rays are the real gap** — no DQ, no ramp fitting,
+   no deepCR model for NIRC2. The principled fix is the frame-vs-stack
+   outlier pass (resample the combined mosaic back to each frame,
+   flag deviants) — which is *also* the standing stack-level open item
+   ("Cosmic-ray rejection at combine"); one implementation serves both.
+5. **Per-frame PSFs at epoch granularity** — the tier-A candidates are
+   already per-epoch, reduced pipeline-identically; per-frame products
+   MJD-match each science frame to its nearest PSF epoch and record the
+   match + time gap. Finer-than-epoch PSF knowledge does not exist in the
+   data; recorded caveat, evidence-based selection stays with modelling.
+6. **Packaging hook** — a `frame_products` Keck branch reads the prepared
+   frames from the work dir after combine (offsets + weights exist by
+   then), cuts target-centred stamps by offset arithmetic (no WCS), and
+   writes the same data/noise(+mask) product family with a manifest whose
+   registration block is offset-based (schema v2's `source` and
+   `sky_subtracted` fields already generalise; sky levels per frame come
+   from the running-sky stage records).
+
+### Recommendation
+
+GO, sequenced: (1) finish the acceptance checks (#13) and the plate-scale
+fix; (2) implement the frame-vs-stack outlier pass (closes the stack-level
+CR open item and unlocks per-frame CR masks); (3) then the Keck frames
+branch per the deltas above, validated on B1938. Do not start (3) before
+(1)-(2) — the mode would inherit an unaccepted foundation and unflagged
+CRs.
+
 ## Open items
 
 - **Wide camera**: the published distortion solutions are narrow-camera

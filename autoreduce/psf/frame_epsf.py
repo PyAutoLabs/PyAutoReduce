@@ -125,17 +125,41 @@ def build_frame_epsf(
             work, found, spec.psf_shape, spec.psf_full_shape
         )
     except epsf_mod.InsufficientStarsError as err:
-        return (
-            None,
-            None,
-            {
-                "method": "none",
-                "reason": str(err),
-                "n_candidates": 0 if found is None else int(len(found)),
-                "n_patched_pixels": n_patched,
-                "cr_screen": cr_screen,
-            },
-        )
+        tier1 = {
+            "reason": str(err),
+            "n_candidates": 0 if found is None else int(len(found)),
+            "n_patched_pixels": n_patched,
+            "cr_screen": cr_screen,
+        }
+        if adapter.observatory == "jwst":
+            # Tier 2b (issue #29): STPSF model at the frame's detector
+            # position — keeps every JWST frame modelable. A missing stpsf
+            # install is a recorded outcome; any other failure is a real
+            # bug and stays loud.
+            from . import stpsf_model
+
+            try:
+                psf, psf_full, diag2b = stpsf_model.model_frame_psf(
+                    primary,
+                    (float(x), float(y)),
+                    spec,
+                    adapter,
+                    det_shape=sci_hdu.data.shape,
+                )
+            except ImportError as ierr:
+                return (
+                    None,
+                    None,
+                    {"method": "none", "tier2b": f"unavailable: {ierr}", **tier1},
+                )
+            return psf, psf_full, {
+                **diag2b,
+                "tier1_reason": tier1["reason"],
+                "n_candidates": tier1["n_candidates"],
+                "n_patched_pixels": tier1["n_patched_pixels"],
+                "cr_screen": tier1["cr_screen"],
+            }
+        return None, None, {"method": "none", **tier1}
     diag = {
         "method": "epsf-frame-tier1",
         **{k: v for k, v in diag.items() if k != "method"},

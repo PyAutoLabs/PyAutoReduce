@@ -61,10 +61,11 @@ cosmic-ray masks, the WCS manifest with measured relative registration
 (issue #19), and tier-1 native ePSFs per frame (issue #21); design in
 `hst_acs_pipeline.md` ("Per-exposure frame products"). Open items:
 
-- **Tier-2 model PSF** (TinyTim / focus-diverse ePSF grid) — the fallback
-  for frames whose own star field cannot support a tier-1 ePSF (recorded
-  per frame in the manifest today); shared with the mosaic path's
-  `psf/fallback.model_psf` stub.
+- **Tier-2 model PSF, HST side** (TinyTim / focus-diverse ePSF grid) — the
+  fallback for HST frames whose star field cannot support a tier-1 ePSF
+  (recorded per frame in the manifest today); shared with the mosaic path's
+  `psf/fallback.model_psf` stub. The JWST side is **live** (issue #29,
+  STPSF tier-2b — `jwst.md` PSF tiering).
 - ~~JWST analogue~~ — **shipped** (issue #27): frames/registration/PSF
   chain extended to NIRCam per `jwst.md` §"Per-exposure frame products —
   feasibility" (`_crf` inputs, native MJy/sr, DO_NOT_USE-only masking).

@@ -74,6 +74,23 @@ observatories — but GATED on the acceptance checks (#13) completing**: the
 stack-level pipeline should be accepted (θ_E parity, plate-scale fix)
 before a per-frame mode builds on it.
 
+**Implemented (issue #33, 2026-07-10, user-directed go-ahead)** via
+`package/keck_frames.py` — with the plate-scale caveat riding every
+product (`native_scale_note` in the manifest) until the acceptance task's
+epoch-aware fix lands. Corrections/additions from implementation: the
+measured offsets were *already* serialized
+(`registration_offsets_native_pix` — the note below originally claimed
+otherwise); the new provenance additions are the mapping constants
+(`origin`, `scale_ratio`, `sci_path`) that make the frame↔mosaic transform
+fully reconstructable. The frame-vs-stack outlier pass ships as per-frame
+`outlier_mask.fits` (positive >5σ residuals against the robustly-rescaled
+resampled mosaic — the mask-generation half of the stack-level CR open
+item; the second-pass recombine remains open). Per-frame PSFs are
+native-pixel stamps of the temporally nearest **accepted** tier-A star
+frame (MJD-matched via `group_epochs`), `psf_provisional` as always;
+products convert to e-/s. `psf_from_frames` stays HST/JWST-only — the AO
+mosaic PSF is the tier-A epoch design, not a stamp combination.
+
 ### Should — the AO case is the strongest one
 
 - **The AO PSF varies frame to frame** (seeing, correction quality) — this

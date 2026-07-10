@@ -412,9 +412,10 @@ class TestPipelinePlumbing:
     def test_non_hst_flag_is_loud_before_any_stage(self, tmp_path):
         from autoreduce import pipeline as pipeline_mod
 
-        spec = TargetSpec(name="t", ra=RA, dec=DEC, instrument="nirc2_narrow",
+        spec = TargetSpec(name="t", ra=RA, dec=DEC, instrument="alma",
+                          alma_uids=("A1",), alma_field="F", alma_spws=("1",),
                           frame_products=True)
-        with pytest.raises(ValueError, match="HST and JWST only"):
+        with pytest.raises(ValueError, match="HST, JWST and Keck"):
             pipeline_mod.reduce_target(
                 spec, cache_root=tmp_path / "cache", output_root=tmp_path / "out"
             )
@@ -969,3 +970,165 @@ class TestStpsfTier2b:
         assert psf is None
         assert diag["method"] == "none"
         assert "tier2b" not in diag
+
+
+class TestKeckFrames:
+    def _prepared_frame(self, tmp_path, name, dy=0.0, dx=0.0, spike=None,
+                        shape=(200, 200), mjd=55376.44):
+        """Prepared-NIRC2-like frame: single HDU, ELECTRONS, sky-subtracted,
+        NaN bad pixels, per-frame facts in the header. A Gaussian blob sits
+        at frame centre + (dy, dx) so the recorded offsets are truth."""
+        from astropy.io import fits
+
+        yy, xx = np.mgrid[0 : shape[0], 0 : shape[1]]
+        cy, cx = (shape[0] - 1) / 2.0 + dy, (shape[1] - 1) / 2.0 + dx
+        frame = 3000.0 * np.exp(-(((yy - cy) ** 2 + (xx - cx) ** 2) / (2.0 * 3.0**2)))
+        frame += np.random.default_rng(hash(name) % 2**32).normal(0, 12.0, shape)
+        frame[5, 5] = np.nan  # a bad pixel
+        if spike is not None:
+            frame[spike] += 30000.0
+        header = fits.Header()
+        header["ITIME"] = 60.0
+        header["COADDS"] = 1
+        header["MJD-OBS"] = mjd
+        header["SAMPMODE"] = 3
+        header["MULTISAM"] = 16
+        header["SKYLEV"] = 1500.0
+        # Identity distortion tables, shared by all frames.
+        for key, fname in (("DISTX", "dist_x.fits"), ("DISTY", "dist_y.fits")):
+            p = tmp_path / fname
+            if not p.exists():
+                fits.PrimaryHDU(np.zeros(shape, dtype=np.float32)).writeto(p)
+            header[key] = str(p)
+        path = tmp_path / name
+        fits.PrimaryHDU(frame.astype(np.float32), header=header).writeto(path)
+        return path
+
+    def _run_keck(self, tmp_path, spike=None, psf_frames=(), psf_mjds=(),
+                  psf_record=None):
+        from astropy.io import fits
+        from astropy.wcs import WCS
+        from autoreduce.package import keck_frames as keck_mod
+
+        offsets = [(0.0, 0.0), (3.0, -2.0)]
+        paths = [
+            self._prepared_frame(tmp_path, "N2.1_prep.fits", 0.0, 0.0),
+            self._prepared_frame(tmp_path, "N2.2_prep.fits", 3.0, -2.0,
+                                 spike=spike, mjd=55376.45),
+        ]
+        # Mosaic: the blob at the grid centre, cps units, WCS TAN at target.
+        shape = (240, 240)
+        yy, xx = np.mgrid[0 : shape[0], 0 : shape[1]]
+        cy = cx = (shape[0] - 1) / 2.0
+        mosaic = (3000.0 / 60.0) * np.exp(
+            -(((yy - cy) ** 2 + (xx - cx) ** 2) / (2.0 * 3.0**2))
+        )
+        wcs = WCS(naxis=2)
+        wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+        wcs.wcs.crval = [RA, DEC]
+        wcs.wcs.crpix = [cx + 1.0, cy + 1.0]
+        scale_deg = 0.009942 / 3600.0
+        wcs.wcs.cd = [[-scale_deg, 0.0], [0.0, scale_deg]]
+        hdr = wcs.to_header()
+        sci_path = tmp_path / "mosaic_sci.fits"
+        fits.PrimaryHDU(mosaic.astype(np.float32), header=hdr).writeto(sci_path)
+        # Mapping constants: frame centre -> mosaic centre for offset (0,0):
+        # mosaic = (frame - offset - origin) * 1.0, so origin places the
+        # frame centre at the mosaic centre.
+        origin = ((200 - 1) / 2.0 - cy, (200 - 1) / 2.0 - cx)
+        drizzle_prov = {
+            "registration_offsets_native_pix": offsets,
+            "origin": list(origin),
+            "scale_ratio": 1.0,
+            "sci_path": str(sci_path),
+            "distortion_files": ["dist_x.fits", "dist_y.fits"],
+        }
+        spec = TargetSpec(
+            name="t", ra=RA, dec=DEC, cutout_shape=(51, 51),
+            instrument="nirc2_narrow", final_scale=0.009942,
+            frame_products=True,
+        )
+        return keck_mod.package_keck_frame_products(
+            paths, spec, instruments.get("nirc2_narrow"), tmp_path / "out",
+            drizzle_prov=drizzle_prov,
+            psf_star_frames=list(psf_frames), psf_star_mjds=list(psf_mjds),
+            psf_record=psf_record or {},
+        )
+
+    def test_frames_packaged_with_offset_registration(self, tmp_path):
+        from astropy.io import fits
+
+        fragment = self._run_keck(tmp_path)
+        assert fragment["n_frames"] == 2
+        manifest = _manifest(tmp_path)
+        e2 = manifest["frames"][1]
+        assert e2["registration"]["offset_dy_px"] == pytest.approx(3.0)
+        assert e2["registration"]["offset_dx_px"] == pytest.approx(-2.0)
+        assert e2["sky_subtracted_e"] == pytest.approx(1500.0)
+        assert manifest["data_units"] == "ELECTRONS/S"
+        # The blob lands centred in every stamp: offsets undone correctly.
+        for e in manifest["frames"]:
+            data = fits.getdata(
+                tmp_path / "out" / "frames" / e["dir"] / "data.fits"
+            ).astype(float)
+            peak = np.unravel_index(np.argmax(data), data.shape)
+            # Half-pixel centring ambiguity: the discrete peak may land on
+            # either neighbour of the true (fractional) centre.
+            assert abs(peak[0] - 25) <= 1 and abs(peak[1] - 25) <= 1
+            # cps conversion: ~3000 e- / 60 s at the blob peak
+            assert data[peak] == pytest.approx(50.0, rel=0.06)
+
+    def test_outlier_pass_flags_cr(self, tmp_path):
+        from astropy.io import fits
+
+        # Spike inside frame 2's stamp: frame centre offset (3,-2), stamp
+        # spans centre±25 in frame coords.
+        fragment = self._run_keck(tmp_path, spike=(105, 90))
+        manifest = _manifest(tmp_path)
+        e2 = manifest["frames"][1]
+        assert e2["n_outlier_pixels"] >= 1
+        mask = fits.getdata(
+            tmp_path / "out" / "frames" / e2["dir"] / "outlier_mask.fits"
+        )
+        assert mask.sum() >= 1
+        noise = fits.getdata(
+            tmp_path / "out" / "frames" / e2["dir"] / "noise_map.fits"
+        ).astype(float)
+        assert noise.max() == pytest.approx(rms_masked := 1.0e8, rel=1e-3)
+
+    def test_psf_stamp_epoch_matched(self, tmp_path):
+        from astropy.io import fits
+
+        yy, xx = np.mgrid[0:200, 0:200]
+        star = 5.0e4 * np.exp(-(((yy - 99.0) ** 2 + (xx - 101.0) ** 2) / (2.0 * 2.0**2)))
+        fragment = self._run_keck(
+            tmp_path,
+            psf_frames=[star],
+            psf_mjds=[55376.4391],
+            psf_record={"candidates": [{"epoch": 0, "mjd_start": 55376.4391}]},
+        )
+        assert fragment["n_frames_with_psf"] == 2
+        e = _manifest(tmp_path)["frames"][0]
+        assert e["psf"]["method"].startswith("tier-A star frame stamp")
+        assert e["psf"]["psf_provisional"] is True
+        psf = fits.getdata(
+            tmp_path / "out" / "frames" / e["dir"] / "psf.fits"
+        ).astype(float)
+        assert psf.shape == (21, 21)
+        assert psf.sum() == pytest.approx(1.0, abs=1e-4)
+
+    def test_no_accepted_epoch_recorded(self, tmp_path):
+        fragment = self._run_keck(tmp_path)
+        assert fragment["n_frames_with_psf"] == 0
+        e = _manifest(tmp_path)["frames"][0]
+        assert e["psf"]["method"] == "none"
+
+    def test_psf_from_frames_stays_hst_jwst(self, tmp_path):
+        from autoreduce import pipeline as pipeline_mod
+
+        spec = TargetSpec(name="t", ra=RA, dec=DEC, instrument="nirc2_narrow",
+                          psf_from_frames=True)
+        with pytest.raises(ValueError, match="HST and JWST only"):
+            pipeline_mod.reduce_target(
+                spec, cache_root=tmp_path / "c", output_root=tmp_path / "o"
+            )

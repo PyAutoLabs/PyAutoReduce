@@ -58,12 +58,18 @@ def combine(
                         "weight_type", "ivm"
                     ),
                 },
+                # The _crf products (outlier-flagged, tweakreg-updated cal
+                # frames) are the JWST analogue of driz_cr-flagged _flc files
+                # — the frame-products mode packages them (issue #27).
+                "outlier_detection": {"save_results": True},
             },
         )
 
     i2d = output_dir / f"{product_name}_i2d.fits"
     if not i2d.exists():
         raise FileNotFoundError(f"calwebb_image3 did not produce {i2d}")
+
+    crf_paths = sorted(str(p) for p in output_dir.glob("*_crf.fits"))
 
     # Normalize to the internal contract: standalone sci/wht/err files.
     with fits.open(i2d) as hdul:
@@ -95,6 +101,10 @@ def combine(
             "rotation": 0.0,
         },
         head={"backend": "jwst_image3"},
-        tail={"err_path": str(paths["err"]), "i2d_path": str(i2d)},
+        tail={
+            "err_path": str(paths["err"]),
+            "i2d_path": str(i2d),
+            "crf_paths": crf_paths,
+        },
     )
     return paths["sci"], paths["wht"], provenance

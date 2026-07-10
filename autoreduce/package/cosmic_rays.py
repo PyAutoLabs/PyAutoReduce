@@ -78,4 +78,14 @@ def cr_method_record(adapter_key: str) -> Dict:
         # IR CRs are flagged during calwf3 up-the-ramp fitting and arrive in
         # DQ; there is nothing for deepCR to add.
         return {"method": "ramp-fitting (calwf3)", "model": None, "threshold": None}
+    if adapter_key in ("nircam_sw", "nircam_lw"):
+        # JWST ramps *remove* cosmic rays during slope fitting (jump
+        # detection); stack outliers arrive as DO_NOT_USE flags via image3's
+        # outlier_detection in the _crf products. Nothing for deepCR to add
+        # (and no JWST model exists).
+        return {
+            "method": "ramp-jump (calwebb stage 1) + image3 outlier_detection (crf)",
+            "model": None,
+            "threshold": None,
+        }
     raise KeyError(f"no per-frame CR method for instrument {adapter_key!r}")

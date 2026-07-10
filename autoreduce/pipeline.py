@@ -605,12 +605,31 @@ def _package_frames(ctx: _StageContext) -> None:
     """
     if not ctx.spec.frame_products:
         return
+    exposures = ctx.exposures
+    driz_cr_run = not ctx.record["drizzle"]["single_exposure_branch"]
+    if ctx.adapter.observatory == "jwst":
+        # The _crf products are the JWST analogue of driz_cr-flagged _flc
+        # files: image3's outlier flags (DO_NOT_USE) and tweakreg-updated
+        # WCS live there, not in the on-disk _cal inputs.
+        crf_paths = ctx.record["drizzle"].get("crf_paths") or []
+        if crf_paths:
+            exposures = [Path(p) for p in crf_paths]
+            source_note = "image3 _crf products (outlier-flagged, tweakreg WCS)"
+        else:
+            driz_cr_run = False
+            source_note = (
+                "_cal products — no _crf captured, stack outlier flags and "
+                "tweakreg WCS updates absent"
+            )
+    else:
+        source_note = "driz_cr-flagged _flc/_flt exposures (flags in place)"
     fragment = frames_mod.package_frame_products(
-        ctx.exposures,
+        exposures,
         ctx.spec,
         ctx.adapter,
         ctx.out_dir,
-        driz_cr_run=not ctx.record["drizzle"]["single_exposure_branch"],
+        driz_cr_run=driz_cr_run,
+        source_note=source_note,
     )
     ctx.record["frames"] = fragment
     ctx.record["package"]["products"].append("frames/manifest.json")
@@ -634,12 +653,12 @@ def reduce_target(
     adapter = instruments.get(spec.instrument)
     if (spec.frame_products or spec.psf_from_frames) and getattr(
         adapter, "observatory", None
-    ) != "hst":
-        # Fail before any download: the JWST/ground analogues are open
-        # design questions (docs/design/roadmap.md, per-exposure frame
-        # products), not silently-skipped options.
+    ) not in ("hst", "jwst"):
+        # Fail before any download: ground-based analogues are open design
+        # questions, not silently-skipped options. JWST landed via the
+        # feasibility deltas (docs/design/jwst.md, issue #27).
         raise ValueError(
-            "frame_products / psf_from_frames are HST-only "
+            "frame_products / psf_from_frames support HST and JWST only "
             f"(instrument {spec.instrument!r})"
         )
     cache = cache_mod.ExposureCache(Path(cache_root), size_cap_bytes=size_cap_bytes)

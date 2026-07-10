@@ -190,6 +190,20 @@ mosaic. Never pair a native-frame PSF with a drizzled image.
   needed for SLACS-style galaxy-galaxy lenses; becomes the default tier for
   lensed quasars/AGN where the point source itself constrains the PSF.
 
+- **Alternative construction — `TargetSpec.psf_from_frames` (issue #21):**
+  the delivered mosaic-grid PSF built by *combining the per-frame tier-1
+  ePSFs* instead of measuring stars on the resampled mosaic: each frame's
+  native ePSF is convolved with the drizzle drop (`final_pixfrac` box, exact
+  fractional-width Fourier convolution), resampled onto the mosaic grid via
+  the local frame→mosaic WCS Jacobian at the target position, and
+  exposure-time-weighted averaged (`psf/frame_combine.py`). Honours the
+  drizzled-PSF invariant by construction — it is the drizzle geometry
+  applied to the PSF — while sidestepping mosaic resampling artifacts and
+  star scarcity (every frame's full star field contributes). Approximation
+  recorded in diagnostics: local-affine geometry + drop convolution;
+  sub-pixel output-sampling phases not modelled. Loud when no frame yields
+  a tier-1 ePSF — never silently falls back to the mosaic-star ePSF.
+
 Products: `psf.fits` 21×21 for fit convolution; `psf_full.fits` 61×61
 capturing wings (diffraction spikes matter for quasar work later). Both odd,
 centered, unit-normalized; construction method + diagnostics recorded.
@@ -349,9 +363,21 @@ Design decisions:
   only CR rejection); re-runs clear `frames/` first so a smaller exposure
   set leaves no orphan chip directories.
 
-**Follow-up (not in v1):** per-frame native-pixel PSFs (TinyTim / undrizzled
-ePSF) — the frames are not fully modeling-ready without them; tracked on the
-roadmap.
+- **Per-frame PSF (tier 1: native ePSF; issue #21)** — each chip dir ships
+  `psf.fits` / `psf_full.fits` built from the frame's own full chip on
+  native (undrizzled, distorted) pixels: DQ-flagged pixels are NaN-screened
+  (detection masks them; stamp extraction rejects windows they touch — in
+  multi-exposure visits the driz_cr flags kill cosmic rays masquerading as
+  stars; single-exposure visits have only the shape cuts, recorded as
+  `cr_screen` in the manifest), the target-exclusion cut uses the
+  full-distortion projection, and the saturation cap is formed in the
+  frame's native units. **Insufficient stars is a recorded outcome, not a
+  hard stop** — a deliberate deviation from the mosaic path's tier-2
+  escalation: a single ~500 s frame legitimately may lack the minimum
+  usable stars, and its data products remain useful; the manifest `psf`
+  block and a loud runtime notice say the frame is not modelable until the
+  tier-2 model PSF (TinyTim / focus-diverse grid) lands — that tier stays
+  on the roadmap.
 
 ## Non-goals (phase 1)
 

@@ -534,3 +534,183 @@ class TestRegistration:
         assert reg["rms_ra_mas"] == pytest.approx(44.5)
         assert reg["nmatches"] == 30
         assert reg["residual_dy_px"] == 0.0 and reg["reference"] is None
+
+
+class TestFramePsf:
+    def test_insufficient_stars_is_recorded_not_fatal(self, no_cr, tmp_path, capsys):
+        # A starless frame ships its data products, records the PSF outcome,
+        # and says so loudly — it must not hard-stop the reduction.
+        fragment = _run(tmp_path, [_write_exposure(tmp_path, nchips=1)])
+        entry = _manifest(tmp_path)["frames"][0]
+        assert entry["psf"]["method"] == "none"
+        assert "usable stars" in entry["psf"]["reason"]
+        chip_dir = tmp_path / "out" / "frames" / "j8pu42vlq_chip1"
+        assert not (chip_dir / "psf.fits").exists()
+        assert fragment["n_frames_with_psf"] == 0
+        assert "per-frame ePSF NOT viable" in capsys.readouterr().out
+
+    def test_peak_max_native_units(self):
+        from autoreduce.psf.frame_epsf import _native_peak_max
+        from autoreduce.psf.stars import StarSelection
+
+        adapter = instruments.get("acs_wfc")
+        selection = StarSelection()
+        cap = selection.saturation_fraction * adapter.saturation_dn
+        assert _native_peak_max("ELECTRONS", 522.0, adapter, selection) == (
+            pytest.approx(cap)
+        )
+        assert _native_peak_max("ELECTRONS/S", 500.0, adapter, selection) == (
+            pytest.approx(cap / 500.0)
+        )
+        with pytest.raises(ValueError, match="EXPTIME"):
+            _native_peak_max("ELECTRONS/S", 0.0, adapter, selection)
+        with pytest.raises(ValueError, match="BUNIT"):
+            _native_peak_max("MJY/SR", 522.0, adapter, selection)
+
+    def test_starry_frame_builds_native_epsf(self, no_cr, tmp_path):
+        # A frame with a usable star field gets psf.fits/psf_full.fits on
+        # its native pixel grid, with tier-1 diagnostics in the manifest.
+        rng = np.random.default_rng(3)
+        hdul = _frame_hdul(nchips=1, shape=(400, 400))
+        hdr = hdul["SCI", 1].header
+        # Star ring outside the target-exclusion radius (50 px), inside the
+        # edge margin (46 px), separated by > 25 px.
+        sci = hdul["SCI", 1].data
+        yy, xx = np.mgrid[0 : sci.shape[0], 0 : sci.shape[1]]
+        n_stars = 12
+        for k in range(n_stars):
+            ang = 2.0 * np.pi * k / n_stars
+            r = 90.0 + 20.0 * (k % 2)
+            cy, cx = 199.5 + r * np.sin(ang), 199.5 + r * np.cos(ang)
+            sci += 5000.0 * np.exp(
+                -(((yy - cy) ** 2 + (xx - cx) ** 2) / (2.0 * 1.5**2))
+            )
+        sci += rng.normal(0.0, 2.0, sci.shape)
+        path = tmp_path / "j8pu42vlq_flc.fits"
+        hdul.writeto(path)
+
+        fragment = _run(tmp_path, [path])
+        entry = _manifest(tmp_path)["frames"][0]
+        assert entry["psf"]["method"] == "epsf-frame-tier1"
+        assert entry["psf"]["n_stars_used"] >= 8
+        assert fragment["n_frames_with_psf"] == 1
+
+        from astropy.io import fits
+
+        chip_dir = tmp_path / "out" / "frames" / "j8pu42vlq_chip1"
+        psf = fits.getdata(chip_dir / "psf.fits").astype(float)
+        assert psf.shape == (21, 21)
+        assert psf.sum() == pytest.approx(1.0, abs=1e-4)
+        assert (tmp_path / "out" / "frames" / "j8pu42vlq_chip1" / "psf_full.fits").exists()
+
+    def test_dq_flagged_spike_is_patched_away(self, no_cr, tmp_path):
+        # A CR-like flagged spike is local-median patched out of the
+        # estimator's working image — it must not enter the star list, and
+        # the patch is recorded in the diagnostics.
+        from autoreduce.psf.frame_epsf import build_frame_epsf
+
+        hdul = _frame_hdul(nchips=1, shape=(400, 400))
+        sci = hdul["SCI", 1].data
+        cy, cx = 289, 199
+        sci[cy - 1 : cy + 2, cx - 1 : cx + 2] += 30000.0
+        hdul["DQ", 1].data[cy - 1 : cy + 2, cx - 1 : cx + 2] = 4096
+        psf, psf_full, diag = build_frame_epsf(
+            hdul, 1, _spec(), instruments.get("acs_wfc")
+        )
+        assert psf is None
+        assert diag["method"] == "none"
+        assert diag["n_candidates"] == 0
+        assert diag["n_patched_pixels"] == 9
+        assert diag["cr_screen"] == "DQ-patched"
+
+
+class TestPsfFromFrames:
+    def _starry_exposure(self, tmp_path):
+        hdul = _frame_hdul(nchips=1, shape=(400, 400))
+        sci = hdul["SCI", 1].data
+        yy, xx = np.mgrid[0 : sci.shape[0], 0 : sci.shape[1]]
+        for k in range(12):
+            ang = 2.0 * np.pi * k / 12
+            r = 90.0 + 20.0 * (k % 2)
+            cy, cx = 199.5 + r * np.sin(ang), 199.5 + r * np.cos(ang)
+            sci += 5000.0 * np.exp(
+                -(((yy - cy) ** 2 + (xx - cx) ** 2) / (2.0 * 1.5**2))
+            )
+        sci += np.random.default_rng(3).normal(0.0, 2.0, sci.shape)
+        # The default WCS puts the target at (99.5, 99.5) — on-chip, as the
+        # combination requires.
+        path = tmp_path / "j8pu42vlq_flc.fits"
+        hdul.writeto(path)
+        return path, hdul["SCI", 1].header
+
+    def test_drop_convolve_preserves_flux_and_widens(self):
+        from autoreduce.psf.frame_combine import _drop_convolve
+
+        kernel = np.zeros((31, 31))
+        yy, xx = np.mgrid[0:31, 0:31]
+        kernel = np.exp(-(((yy - 15) ** 2 + (xx - 15) ** 2) / (2.0 * 1.5**2)))
+        kernel /= kernel.sum()
+        out = _drop_convolve(kernel, pixfrac=0.8)
+        assert out.sum() == pytest.approx(1.0, abs=1e-8)
+        # Second moment grows by the box variance pixfrac^2/12 per axis.
+        def var_y(k):
+            return float((k * (yy - 15) ** 2).sum() / k.sum())
+        assert var_y(out) - var_y(kernel) == pytest.approx(0.8**2 / 12.0, rel=0.05)
+
+    def test_local_jacobian_scale(self):
+        from astropy.wcs import WCS
+        from autoreduce.psf.frame_combine import _local_jacobian
+
+        def tan_wcs(scale_deg):
+            w = WCS(naxis=2)
+            w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+            w.wcs.crval = [RA, DEC]
+            w.wcs.crpix = [100.5, 100.5]
+            w.wcs.cdelt = [-scale_deg, scale_deg]
+            return w
+
+        frame = tan_wcs(0.05 / 3600.0)
+        mosaic = tan_wcs(0.10 / 3600.0)  # 2x coarser
+        jac = _local_jacobian(frame, (99.5, 99.5), mosaic)
+        assert jac == pytest.approx(0.5 * np.eye(2), abs=1e-6)
+
+    def test_combined_psf_identity_geometry(self, no_cr, tmp_path):
+        # Mosaic grid == frame grid: the combination reduces to the (drop-
+        # convolved) frame ePSF — normalized, centred, method recorded.
+        from autoreduce.psf.frame_combine import combined_mosaic_psf
+
+        path, hdr = self._starry_exposure(tmp_path)
+        psf, psf_full, diag = combined_mosaic_psf(
+            [path], _spec(), instruments.get("acs_wfc"), hdr
+        )
+        assert diag["method"] == "epsf-frames-combined"
+        assert diag["n_frames_combined"] == 1
+        assert diag["frames"][0]["weight_exptime"] == pytest.approx(500.0)
+        assert psf.shape == (21, 21)
+        assert psf.sum() == pytest.approx(1.0, abs=1e-4)
+        peak = np.unravel_index(np.argmax(psf), psf.shape)
+        assert peak == (10, 10)
+
+    def test_no_viable_frames_is_loud(self, no_cr, tmp_path):
+        from autoreduce.psf.frame_combine import combined_mosaic_psf
+
+        path = _write_exposure(tmp_path, nchips=1)  # starless
+        from astropy.io import fits
+
+        hdr = fits.open(path)["SCI", 1].header
+        with pytest.raises(ValueError, match="no frame yields"):
+            combined_mosaic_psf([path], _spec(), instruments.get("acs_wfc"), hdr)
+
+    def test_non_hst_guard_covers_psf_from_frames(self, tmp_path):
+        from autoreduce import pipeline as pipeline_mod
+
+        spec = TargetSpec(
+            name="t", ra=RA, dec=DEC, instrument="nircam_lw", psf_from_frames=True
+        )
+        with pytest.raises(ValueError, match="HST-only"):
+            pipeline_mod.reduce_target(
+                spec, cache_root=tmp_path / "c", output_root=tmp_path / "o"
+            )
+
+    def test_spec_default_off(self):
+        assert TargetSpec(name="t", ra=RA, dec=DEC).psf_from_frames is False

@@ -111,8 +111,8 @@ def _write_product(data: np.ndarray, header, out_path: Path, dtype) -> None:
 
 
 def _package_one_chip(
-    hdul, extver: int, spec: TargetSpec, shape: Tuple[int, int], chip_dir: Path,
-    cr_masker,
+    hdul, extver: int, spec: TargetSpec, adapter: InstrumentAdapter,
+    shape: Tuple[int, int], chip_dir: Path, cr_masker,
 ) -> Dict:
     """One SCI chip -> data/noise/dq/cr_mask FITS + its manifest entry."""
     from astropy.nddata import Cutout2D
@@ -220,7 +220,29 @@ def _package_one_chip(
             "rms_dec_mas": float(hdr["RMS_DEC"]) if "RMS_DEC" in hdr else None,
             "nmatches": int(hdr["NMATCHES"]) if "NMATCHES" in hdr else None,
         },
+        "psf": _frame_psf(hdul, extver, spec, adapter, chip_dir),
     }
+
+
+def _frame_psf(hdul, extver, spec, adapter, chip_dir: Path) -> Dict:
+    """Tier-1 native ePSF for one chip; writes psf files when viable."""
+    from ..psf import frame_epsf as frame_epsf_mod
+
+    psf, psf_full, diag = frame_epsf_mod.build_frame_epsf(
+        hdul, extver, spec, adapter
+    )
+    if psf is not None:
+        # Plain kernels, mirroring the mosaic PSF products (no WCS — the
+        # kernel is defined on the frame's native pixel grid).
+        from astropy.io import fits
+
+        fits.PrimaryHDU(psf.astype(np.float32)).writeto(
+            chip_dir / "psf.fits", overwrite=True
+        )
+        fits.PrimaryHDU(psf_full.astype(np.float32)).writeto(
+            chip_dir / "psf_full.fits", overwrite=True
+        )
+    return diag
 
 
 def _relative_registration(frames_dir: Path, entries: List[Dict]) -> None:
@@ -342,7 +364,7 @@ def package_frame_products(
                 chip_dir = frames_dir / f"{rootname}_chip{extver}"
                 try:
                     entry = _package_one_chip(
-                        hdul, extver, spec, shape, chip_dir, cr_masker
+                        hdul, extver, spec, adapter, shape, chip_dir, cr_masker
                     )
                 except _ChipSkip as skip:
                     skipped.append(
@@ -441,10 +463,23 @@ def package_frame_products(
         "recorded width for precision work."
     )
 
+    without_psf = [e["dir"] for e in entries if e["psf"]["method"] == "none"]
+    if without_psf:
+        # Loud by design: a frame without a PSF is not modelable until the
+        # tier-2 model PSF exists (issue #21) — say so at reduction time.
+        print(
+            f"[frames] per-frame ePSF NOT viable for {len(without_psf)}/"
+            f"{len(entries)} chips ({', '.join(without_psf)}) — too few "
+            "usable stars on the frame; these frames ship without psf.fits "
+            "and are not modelable until the tier-2 model PSF lands. "
+            "Reasons per frame: frames/manifest.json 'psf'."
+        )
+
     return {
         "n_exposures": len(exposures),
         "n_chips_written": len(entries),
         "n_chips_skipped": len(skipped),
+        "n_frames_with_psf": len(entries) - len(without_psf),
         "driz_cr_run": bool(driz_cr_run),
         "cr_method": cr_method,
         "data_units": "ELECTRONS/S",

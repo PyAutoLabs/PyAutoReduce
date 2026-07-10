@@ -57,11 +57,14 @@ adapter #1; nothing outside `instruments/` may mention a detector by name.
 
 **Shipped (HST)** as the opt-in `TargetSpec.frame_products` packaging mode —
 per-exposure cutouts, ERR-based native-pixel noise maps, DQ + deepCR
-cosmic-ray masks and the WCS manifest; design in `hst_acs_pipeline.md`
-("Per-exposure frame products"). Open items:
+cosmic-ray masks, the WCS manifest with measured relative registration
+(issue #19), and tier-1 native ePSFs per frame (issue #21); design in
+`hst_acs_pipeline.md` ("Per-exposure frame products"). Open items:
 
-- **Per-frame native-pixel PSFs** (TinyTim/ePSF, undrizzled) — the frames
-  are not fully modeling-ready for PyAutoLens without them.
+- **Tier-2 model PSF** (TinyTim / focus-diverse ePSF grid) — the fallback
+  for frames whose own star field cannot support a tier-1 ePSF (recorded
+  per frame in the manifest today); shared with the mosaic path's
+  `psf/fallback.model_psf` stub.
 - **JWST analogue** — whether/what to emit pre-`calwebb_image3` is a
   research task (PyAutoMind
   `research/pyautoreduce/jwst_individual_frame_feasibility.md`).

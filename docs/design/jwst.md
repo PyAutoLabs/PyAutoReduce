@@ -75,8 +75,24 @@ Whether the HST frames → registration → PSF chain (issues #16/#19/#21)
 should and can extend to JWST. **Verdict: GO, phased** — technically
 feasible with modest deltas; scientifically justified specifically for the
 undersampled SW bands and precision applications, with mosaics remaining
-the default for routine extended-source work. Implementation is a follow-up
-feature prompt, not this note.
+the default for routine extended-source work.
+
+**Implemented (issue #27, 2026-07-10)** per the deltas below, with three
+facts implementation added: (a) the DQ policy divergence is load-bearing —
+JWST masking is `dq & DO_NOT_USE` only (ramps remove CRs; informational
+bits like JUMP_DET ride good pixels, and the ePSF estimator likewise
+patches only DO_NOT_USE); (b) frame identity comes from the filename stem
+minus the product suffix (JWST files carry no ROOTNAME; the HST-era
+`split('_')[0]` collides across a visit); (c) the frames manifest is
+**schema v2** — `data_units` derived (loud on heterogeneous inputs),
+`sky_subtracted`/`sky_keyword` generalise MDRIZSKY, and `source` records
+the input family (`_crf` vs `_cal` fallback); (d) **registration residuals
+carry a reliability flag** — JWST dithers routinely put the target near
+detector edges, and a correlation between mostly-masked cutouts locks onto
+mask geometry (~200 px "residuals" on the COSMOS-Web validation), so the
+reference is the best-covered frame, pairs with >20% masked pixels are
+flagged unreliable, and the headline `max_registration_residual_px` is an
+honest `null` when no clean pair exists.
 
 ### Should — what the literature and instrument design say
 

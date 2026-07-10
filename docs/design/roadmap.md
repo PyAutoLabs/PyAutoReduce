@@ -65,9 +65,9 @@ cosmic-ray masks, the WCS manifest with measured relative registration
   for frames whose own star field cannot support a tier-1 ePSF (recorded
   per frame in the manifest today); shared with the mosaic path's
   `psf/fallback.model_psf` stub.
-- **JWST analogue** — whether/what to emit pre-`calwebb_image3` is a
-  research task (PyAutoMind
-  `research/pyautoreduce/jwst_individual_frame_feasibility.md`).
+- ~~JWST analogue~~ — **shipped** (issue #27): frames/registration/PSF
+  chain extended to NIRCam per `jwst.md` §"Per-exposure frame products —
+  feasibility" (`_crf` inputs, native MJy/sr, DO_NOT_USE-only masking).
 - **Per-adapter `dq_bad_bits`** — refinement of the any-nonzero-bit masking
   policy, if a consumer ever needs to keep e.g. warm-pixel bits.
 

@@ -288,8 +288,10 @@ instead of one mosaic (roadmap "Per-exposure frame products"). A packaging
 mode over `autoreduce/package/frames.py`, run between the package stage and
 the provenance write (after driz_cr DQ flags and any TweakReg WCS refinement
 exist, before eviction can delete the cached frames); the mosaic path is
-untouched when the flag is off. HST-only: the flag on any other instrument
-fails fast — the JWST analogue is an open research task.
+untouched when the flag is off. HST and JWST are supported (the JWST
+branch — `_crf` inputs, native MJy/sr, DO_NOT_USE-only masking, manifest
+schema v2 — is specified in `jwst.md` §"Per-exposure frame products —
+feasibility"); the flag on any other instrument fails fast.
 
 Layout (uniform `_chip<EXTVER>`; the physical `CCDCHIP` is in the manifest):
 

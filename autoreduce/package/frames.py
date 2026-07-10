@@ -28,7 +28,7 @@ full distortion model — as the exact per-frame registration anchor.
 import json
 import shutil
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -37,7 +37,7 @@ from ..noise import rms as rms_mod
 from ..target import TargetSpec
 from . import cosmic_rays as cr_mod
 
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
 
 
 class _ChipSkip(Exception):
@@ -67,22 +67,52 @@ def frame_cutout_shape(
     return (_one(cutout_shape[0]), _one(cutout_shape[1]))
 
 
-def _units_to_cps(bunit: str, exptime: float) -> Tuple[float, str]:
-    """(multiplicative factor, provenance note) taking SCI/ERR to e-/s."""
+def _units_to_cps(bunit: str, exptime: float) -> Tuple[float, str, str]:
+    """(factor, provenance note, output BUNIT) for the frame's SCI/ERR.
+
+    HST frames are taken to e-/s so all frames + mosaic share the cps flux
+    scale; JWST frames stay in their native surface-brightness units
+    (defaults-first — MJy/sr is what calwebb delivers and what the mosaic
+    keeps).
+    """
     unit = bunit.strip().upper()
     if unit in ("ELECTRONS/S", "ELECTRON/S", "ELECTRONS/SEC"):
-        return 1.0, "none (already e-/s)"
+        return 1.0, "none (already e-/s)", "ELECTRONS/S"
     if unit in ("ELECTRONS", "ELECTRON"):
         if not np.isfinite(exptime) or exptime <= 0.0:
             raise ValueError(
                 f"cannot convert ELECTRONS to e-/s without a positive EXPTIME: "
                 f"{exptime}"
             )
-        return 1.0 / exptime, "SCI,ERR / EXPTIME"
+        return 1.0 / exptime, "SCI,ERR / EXPTIME", "ELECTRONS/S"
+    if unit == "MJY/SR":
+        return 1.0, "none (native MJy/sr)", "MJy/sr"
     raise ValueError(
-        f"unrecognised frame BUNIT {bunit!r} — expected ELECTRONS or "
-        f"ELECTRONS/S for HST calibrated products"
+        f"unrecognised frame BUNIT {bunit!r} — expected ELECTRONS[/S] (HST) "
+        "or MJy/sr (JWST) calibrated products"
     )
+
+
+def _exposure_time(primary) -> float:
+    """Exposure time across observatories: HST EXPTIME, JWST XPOSURE/EFFEXPTM."""
+    for key in ("EXPTIME", "XPOSURE", "EFFEXPTM"):
+        if key in primary:
+            return float(primary[key])
+    return 0.0
+
+
+def _sky_level(primary, hdr) -> Tuple[float, Optional[str]]:
+    """(sky level, keyword) — HST MDRIZSKY / JWST skymatch BKGLEVEL.
+
+    Both pipelines record the matched sky rather than subtracting it from
+    the calibrated frames; absence means sky matching did not run (a
+    legitimate configuration), recorded as 0.0 with no keyword.
+    """
+    for source in (hdr, primary):
+        for key in ("MDRIZSKY", "BKGLEVEL"):
+            if key in source:
+                return float(source[key]), key
+    return 0.0, None
 
 
 def _sip_only_header(hdr):
@@ -160,17 +190,28 @@ def _package_one_chip(
     # deepCR sees the frame as trained on: native units, sky pedestal in.
     cr_mask = cr_masker(sci_cut_native)
 
-    # globalmin+match sky is only *virtually* subtracted during drizzle —
-    # AstroDrizzle stores it as MDRIZSKY; subtract it so frames share the
-    # mosaic's zero level (absent keyword = sky subtraction not run = 0).
-    mdrizsky = float(hdr.get("MDRIZSKY", 0.0))
-    exptime = float(primary.get("EXPTIME", 0.0))
-    factor, conversion = _units_to_cps(str(hdr.get("BUNIT", "")), exptime)
-    sci_cps = (sci_cut_native - mdrizsky) * factor
+    # Both pipelines record the matched sky rather than subtracting it from
+    # the calibrated frames (AstroDrizzle: MDRIZSKY; image3 skymatch:
+    # BKGLEVEL) — subtract it so frames share the mosaic's zero level.
+    sky, sky_keyword = _sky_level(primary, hdr)
+    exptime = _exposure_time(primary)
+    factor, conversion, out_bunit = _units_to_cps(
+        str(hdr.get("BUNIT", "")), exptime
+    )
+    sci_cps = (sci_cut_native - sky) * factor
     err_cps = err_cut * factor
 
+    # DQ policy diverges by observatory: HST DQ bits all mark suspect data
+    # (any nonzero -> masked). JWST ramps *remove* cosmic rays during slope
+    # fitting, so informational bits (JUMP_DET etc.) ride good pixels — only
+    # DO_NOT_USE (bit 0, also set by image3's outlier_detection in _crf
+    # products) means bad.
+    if adapter.observatory == "jwst":
+        dq_bad = (dq_cut & 1) != 0
+    else:
+        dq_bad = dq_cut != 0
     bad = (
-        (dq_cut != 0)
+        dq_bad
         | cr_mask
         | offchip
         | ~np.isfinite(err_cps)
@@ -187,7 +228,7 @@ def _package_one_chip(
     if "CCDCHIP" in hdr:
         out_header["CCDCHIP"] = hdr["CCDCHIP"]
     data_header = out_header.copy()
-    data_header["BUNIT"] = "ELECTRONS/S"
+    data_header["BUNIT"] = out_bunit
 
     chip_dir.mkdir(parents=True)
     _write_product(data_out, data_header, chip_dir / "data.fits", np.float32)
@@ -204,7 +245,9 @@ def _package_one_chip(
         "expstart": float(primary["EXPSTART"]) if "EXPSTART" in primary else None,
         "filter": spec.filter_name,
         "unit_conversion": conversion,
-        "mdrizsky_subtracted": mdrizsky,
+        "data_units": out_bunit,
+        "sky_subtracted": sky,
+        "sky_keyword": sky_keyword,
         "target_pixel": [float(target_cut_x), float(target_cut_y)],
         "n_masked_pixels": int(bad.sum()),
         "n_cr_pixels": int(cr_mask.sum()),
@@ -265,13 +308,23 @@ def _relative_registration(frames_dir: Path, entries: List[Dict]) -> None:
 
     from ..align.registration import phase_offset
 
-    ref_entry = entries[0]
+    # A correlation between mostly-masked cutouts locks onto the mask
+    # geometry, not the source (JWST validation, issue #27: dithers put the
+    # target near detector edges, off-chip fractions up to ~0.6, "residuals"
+    # of ~200 px). The reference is the best-covered frame, and a pair is
+    # only *reliable* when both frames are mostly unmasked; unreliable
+    # residuals are still recorded but flagged and excluded from the
+    # headline maximum.
+    max_masked_fraction = 0.2
+    ref_entry = min(entries, key=lambda e: e["n_masked_pixels"])
     with fits.open(frames_dir / ref_entry["dir"] / "data.fits") as hdul:
         ref = hdul[0].data.astype(float)
         ref_wcs = WCS(hdul[0].header)
     ny, nx = ref.shape
+    npix = float(ny * nx)
     yy, xx = np.mgrid[0:ny, 0:nx]
     ra, dec = ref_wcs.pixel_to_world_values(xx, yy)
+    ref_ok = ref_entry["n_masked_pixels"] / npix <= max_masked_fraction
 
     # The resample's boundary blends toward cval at the cutout border; a
     # trimmed margin keeps the correlation locked on source structure
@@ -281,7 +334,10 @@ def _relative_registration(frames_dir: Path, entries: List[Dict]) -> None:
     ref_entry["registration"]["reference"] = None
     ref_entry["registration"]["residual_dy_px"] = 0.0
     ref_entry["registration"]["residual_dx_px"] = 0.0
-    for entry in entries[1:]:
+    ref_entry["registration"]["residual_reliable"] = bool(ref_ok)
+    for entry in entries:
+        if entry is ref_entry:
+            continue
         with fits.open(frames_dir / entry["dir"] / "data.fits") as hdul:
             data = hdul[0].data.astype(float)
             wcs = WCS(hdul[0].header)
@@ -301,6 +357,9 @@ def _relative_registration(frames_dir: Path, entries: List[Dict]) -> None:
         entry["registration"]["reference"] = ref_entry["dir"]
         entry["registration"]["residual_dy_px"] = float(dy)
         entry["registration"]["residual_dx_px"] = float(dx)
+        entry["registration"]["residual_reliable"] = bool(
+            ref_ok and entry["n_masked_pixels"] / npix <= max_masked_fraction
+        )
 
 
 def package_frame_products(
@@ -309,10 +368,15 @@ def package_frame_products(
     adapter: InstrumentAdapter,
     out_dir: Path,
     driz_cr_run: bool,
+    source_note: Optional[str] = None,
 ) -> Dict:
     """
     Write ``out_dir/frames/`` for every (exposure, SCI chip) covering the
     target; returns the ``reduction.json`` provenance fragment.
+
+    ``driz_cr_run`` states whether stack-based rejection flagged the frames
+    (HST driz_cr into the _flc DQ; JWST image3 outlier_detection into the
+    _crf DQ). ``source_note`` describes the input family for the manifest.
     """
     from astropy.io import fits
 
@@ -339,11 +403,16 @@ def package_frame_products(
     for path in exposures:
         with fits.open(path) as hdul:
             primary = hdul[0].header
-            rootname = (
-                str(primary.get("ROOTNAME", Path(path).name.split("_")[0]))
-                .strip()
-                .lower()
-            )
+            # HST primaries carry ROOTNAME; JWST files don't — their stem
+            # minus the product suffix (jw..._nrcb1) is the exposure+detector
+            # identity. The naive split('_')[0] would collide across a JWST
+            # visit and trip the duplicate guard below.
+            stem = Path(path).stem
+            for suffix in ("_cal", "_crf", "_flc", "_flt"):
+                if stem.endswith(suffix):
+                    stem = stem[: -len(suffix)]
+                    break
+            rootname = str(primary.get("ROOTNAME", stem)).strip().lower()
             # One file per exposure is an identity assumption, not a hope:
             # a repeated ROOTNAME means the same exposure was ingested twice
             # (e.g. a direct FLC plus its renamed HAP copy) — the mosaic
@@ -384,7 +453,7 @@ def package_frame_products(
         )
 
     _relative_registration(frames_dir, entries)
-    max_residual = max(
+    reliable = [
         float(
             np.hypot(
                 e["registration"]["residual_dy_px"],
@@ -392,17 +461,55 @@ def package_frame_products(
             )
         )
         for e in entries
-    )
+        # A measurement needs a PAIR of well-covered frames: the reference's
+        # own zero-by-construction residual is not one.
+        if e["registration"]["residual_reliable"]
+        and e["registration"]["reference"] is not None
+    ]
+    # None when no sufficiently-covered frame pair exists (e.g. every dither
+    # puts the target near a detector edge) — an honest "unmeasured", never
+    # a mask-geometry artifact presented as a shift.
+    max_residual = max(reliable) if reliable else None
 
-    manifest = {
-        "version": MANIFEST_VERSION,
-        "target": {"name": spec.name, "ra": spec.ra, "dec": spec.dec},
-        "data_units": "ELECTRONS/S",
-        "frame_cutout_shape": list(shape),
-        "native_scale": adapter.native_scale,
-        "driz_cr_run": bool(driz_cr_run),
-        "cr_method": cr_method,
-        "dq_semantics": {
+    units = {e["data_units"] for e in entries}
+    if len(units) != 1:
+        raise ValueError(
+            f"heterogeneous frame units {sorted(units)} for {spec.name} — "
+            "mixed calibration families in one exposure list"
+        )
+    data_units = units.pop()
+
+    if adapter.observatory == "jwst":
+        dq_semantics = {
+            "policy": (
+                "DO_NOT_USE bit, off-chip or non-finite pixel -> "
+                "masked-by-noise (noise=MASKED_NOISE_VALUE, data=0); "
+                "dq.fits keeps all bits"
+            ),
+            "masked_noise_value": rms_mod.MASKED_NOISE_VALUE,
+            "1": (
+                "DO_NOT_USE — calwebb's bad-pixel verdict; image3 "
+                "outlier_detection also sets it in _crf products"
+            ),
+            "4": (
+                "JUMP_DET — informational: the cosmic ray was removed "
+                "during ramp fitting, the pixel is good data"
+            ),
+            "reference": "jwst.datamodels dqflags table",
+            **(
+                {}
+                if driz_cr_run
+                else {
+                    "driz_cr_note": (
+                        "single-exposure reduction: no image3 stack "
+                        "rejection; ramp-level jump detection is the only "
+                        "cosmic-ray rejection"
+                    )
+                }
+            ),
+        }
+    else:
+        dq_semantics = {
             "policy": (
                 "any nonzero DQ bit, deepCR CR pixel, off-chip or non-finite "
                 "pixel -> masked-by-noise (noise=MASKED_NOISE_VALUE, data=0); "
@@ -422,7 +529,18 @@ def package_frame_products(
                     )
                 }
             ),
-        },
+        }
+
+    manifest = {
+        "version": MANIFEST_VERSION,
+        "target": {"name": spec.name, "ra": spec.ra, "dec": spec.dec},
+        "data_units": data_units,
+        "source": source_note or "as-delivered calibrated exposures",
+        "frame_cutout_shape": list(shape),
+        "native_scale": adapter.native_scale,
+        "driz_cr_run": bool(driz_cr_run),
+        "cr_method": cr_method,
+        "dq_semantics": dq_semantics,
         "wcs": (
             "SIP WCS in each data.fits header; NPOL/D2IM lookup distortion is "
             "not FITS-serializable (~0.1 px residual); target_pixel is "
@@ -450,9 +568,17 @@ def package_frame_products(
 
     # Deliberately loud for now (user request, issue #19): the registration
     # story is easy to forget and the header RMS keywords invite misreading.
+    if max_residual is None:
+        headline = (
+            "no reliable frame pair (every frame is heavily masked/off-chip "
+            "at the target) — relative registration UNMEASURED, per-frame "
+            "flags in the manifest"
+        )
+    else:
+        headline = f"max relative residual {max_residual:.3f} native px"
     print(
-        f"[frames] inter-exposure registration ({spec.name}): max relative "
-        f"residual {max_residual:.3f} native px across {len(entries)} chips. "
+        f"[frames] inter-exposure registration ({spec.name}): {headline} "
+        f"across {len(entries)} chips. "
         "Measurement floor is ~0.1-0.3 px where CR-masked pixels bite the "
         "source — sub-0.1 px values are consistent with zero. NOTE: the "
         "header RMS_RA/RMS_DEC keywords state the group's ABSOLUTE catalog "
@@ -482,7 +608,7 @@ def package_frame_products(
         "n_frames_with_psf": len(entries) - len(without_psf),
         "driz_cr_run": bool(driz_cr_run),
         "cr_method": cr_method,
-        "data_units": "ELECTRONS/S",
+        "data_units": data_units,
         "max_registration_residual_px": max_residual,
         "manifest": "frames/manifest.json",
     }

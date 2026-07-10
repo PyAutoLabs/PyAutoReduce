@@ -148,7 +148,8 @@ class TestFrameProducts:
             assert hdul[0].data[25, 25] == pytest.approx(5.0 / 500.0)
         entry = _manifest(tmp_path)["frames"][0]
         assert entry["unit_conversion"] == "SCI,ERR / EXPTIME"
-        assert entry["mdrizsky_subtracted"] == pytest.approx(40.0)
+        assert entry["sky_subtracted"] == pytest.approx(40.0)
+        assert entry["sky_keyword"] == "MDRIZSKY"
 
     def test_cps_input_needs_no_conversion(self, no_cr, tmp_path):
         from astropy.io import fits
@@ -166,7 +167,7 @@ class TestFrameProducts:
         )
 
     def test_unknown_bunit_is_loud(self, no_cr, tmp_path):
-        exposure = _write_exposure(tmp_path, bunit="MJY/SR")
+        exposure = _write_exposure(tmp_path, bunit="COUNTS")
         with pytest.raises(ValueError, match="BUNIT"):
             _run(tmp_path, [exposure])
 
@@ -370,7 +371,7 @@ class TestPipelinePlumbing:
             pipeline_mod, "_evict", lambda *a, **k: order.append("evict")
         )
 
-        def fake_frames(exposures, spec, adapter, out_dir, driz_cr_run):
+        def fake_frames(exposures, spec, adapter, out_dir, driz_cr_run, source_note=None):
             order.append("frames")
             return {"n_chips_written": 2, "driz_cr_run": driz_cr_run}
 
@@ -399,9 +400,9 @@ class TestPipelinePlumbing:
     def test_non_hst_flag_is_loud_before_any_stage(self, tmp_path):
         from autoreduce import pipeline as pipeline_mod
 
-        spec = TargetSpec(name="t", ra=RA, dec=DEC, instrument="nircam_lw",
+        spec = TargetSpec(name="t", ra=RA, dec=DEC, instrument="nirc2_narrow",
                           frame_products=True)
-        with pytest.raises(ValueError, match="HST-only"):
+        with pytest.raises(ValueError, match="HST and JWST only"):
             pipeline_mod.reduce_target(
                 spec, cache_root=tmp_path / "cache", output_root=tmp_path / "out"
             )
@@ -565,7 +566,7 @@ class TestFramePsf:
         with pytest.raises(ValueError, match="EXPTIME"):
             _native_peak_max("ELECTRONS/S", 0.0, adapter, selection)
         with pytest.raises(ValueError, match="BUNIT"):
-            _native_peak_max("MJY/SR", 522.0, adapter, selection)
+            _native_peak_max("COUNTS", 522.0, adapter, selection)
 
     def test_starry_frame_builds_native_epsf(self, no_cr, tmp_path):
         # A frame with a usable star field gets psf.fits/psf_full.fits on
@@ -705,12 +706,189 @@ class TestPsfFromFrames:
         from autoreduce import pipeline as pipeline_mod
 
         spec = TargetSpec(
-            name="t", ra=RA, dec=DEC, instrument="nircam_lw", psf_from_frames=True
+            name="t", ra=RA, dec=DEC, instrument="nirc2_narrow", psf_from_frames=True
         )
-        with pytest.raises(ValueError, match="HST-only"):
+        with pytest.raises(ValueError, match="HST and JWST only"):
             pipeline_mod.reduce_target(
                 spec, cache_root=tmp_path / "c", output_root=tmp_path / "o"
             )
 
     def test_spec_default_off(self):
         assert TargetSpec(name="t", ra=RA, dec=DEC).psf_from_frames is False
+
+
+def _jwst_hdul(bunit="MJy/sr", xposure=515.4, bkglevel=0.21, shape=(200, 200)):
+    """Synthetic JWST _cal/_crf-shaped file: no ROOTNAME, XPOSURE exposure
+    time, single SCI/ERR/DQ (EXTVER 1), MJy/sr units, skymatch BKGLEVEL."""
+    from astropy.io import fits
+    from astropy.wcs import WCS
+
+    primary = fits.PrimaryHDU()
+    primary.header["XPOSURE"] = xposure
+    primary.header["EFFEXPTM"] = xposure
+    primary.header["INSTRUME"] = "NIRCAM"
+    primary.header["TELESCOP"] = "JWST"
+    wcs = WCS(naxis=2)
+    wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    wcs.wcs.crval = [RA, DEC]
+    wcs.wcs.crpix = [100.5, 100.5]
+    wcs.wcs.cdelt = [-0.063 / 3600.0, 0.063 / 3600.0]
+    hdr = wcs.to_header()
+    hdr["BUNIT"] = bunit
+    hdr["BKGLEVEL"] = bkglevel
+    sci = np.full(shape, 0.75)
+    err = np.full(shape, 0.02)
+    dq = np.zeros(shape, dtype=np.int32)
+    return fits.HDUList(
+        [
+            primary,
+            fits.ImageHDU(data=sci, header=hdr, name="SCI", ver=1),
+            fits.ImageHDU(data=err, header=hdr.copy(), name="ERR", ver=1),
+            fits.ImageHDU(data=dq, header=hdr.copy(), name="DQ", ver=1),
+        ]
+    )
+
+
+class TestJwstFrames:
+    def _run_jwst(self, tmp_path, hdul, name="jw01727043001_02101_00001_nrcb1_crf.fits",
+                  driz_cr_run=True):
+        path = tmp_path / name
+        hdul.writeto(path)
+        spec = TargetSpec(
+            name="t", ra=RA, dec=DEC, cutout_shape=(51, 51),
+            instrument="nircam_lw", frame_products=True,
+        )
+        return frames_mod.package_frame_products(
+            [path], spec, instruments.get("nircam_lw"), tmp_path / "out",
+            driz_cr_run=driz_cr_run,
+            source_note="image3 _crf products (outlier-flagged, tweakreg WCS)",
+        )
+
+    def test_native_units_kept_and_recorded(self, no_cr, tmp_path):
+        from astropy.io import fits
+
+        fragment = self._run_jwst(tmp_path, _jwst_hdul())
+        assert fragment["data_units"] == "MJy/sr"
+        manifest = _manifest(tmp_path)
+        assert manifest["data_units"] == "MJy/sr"
+        entry = manifest["frames"][0]
+        assert entry["unit_conversion"] == "none (native MJy/sr)"
+        # rootname derived from the filename stem (no ROOTNAME keyword).
+        assert entry["dir"] == "jw01727043001_02101_00001_nrcb1_chip1"
+        chip_dir = tmp_path / "out" / "frames" / entry["dir"]
+        with fits.open(chip_dir / "data.fits") as h:
+            assert h[0].header["BUNIT"] == "MJy/sr"
+            # 0.75 MJy/sr − 0.21 BKGLEVEL, no exptime division
+            assert h[0].data[20, 20] == pytest.approx(0.54)
+        assert entry["sky_subtracted"] == pytest.approx(0.21)
+        assert entry["sky_keyword"] == "BKGLEVEL"
+        assert entry["exptime"] == pytest.approx(515.4)
+
+    def test_dq_policy_do_not_use_only(self, no_cr, tmp_path):
+        from astropy.io import fits
+
+        hdul = _jwst_hdul()
+        # JUMP_DET (4) alone = good data (CR removed at ramp level);
+        # DO_NOT_USE (1, e.g. set by image3 outlier_detection) = bad.
+        hdul["DQ", 1].data[95, 95] = 4
+        hdul["DQ", 1].data[105, 105] = 1 | 4
+        fragment = self._run_jwst(tmp_path, hdul)
+        entry = _manifest(tmp_path)["frames"][0]
+        chip_dir = tmp_path / "out" / "frames" / entry["dir"]
+        noise = fits.getdata(chip_dir / "noise_map.fits").astype(float)
+        dq = fits.getdata(chip_dir / "dq.fits")
+        jump_only = np.argwhere(dq == 4)
+        do_not_use = np.argwhere((dq & 1) != 0)
+        assert len(jump_only) == 1 and len(do_not_use) == 1
+        y, x = jump_only[0]
+        assert noise[y, x] < 1.0  # good pixel keeps its ERR
+        y, x = do_not_use[0]
+        assert noise[y, x] == pytest.approx(1.0e8)
+        assert entry["n_masked_pixels"] == 1
+        semantics = _manifest(tmp_path)["dq_semantics"]
+        assert "DO_NOT_USE" in semantics["1"]
+        assert "good data" in semantics["4"]
+
+    def test_cr_method_and_source_recorded(self, no_cr, tmp_path):
+        fragment = self._run_jwst(tmp_path, _jwst_hdul())
+        assert "ramp-jump" in fragment["cr_method"]["method"]
+        assert fragment["cr_method"]["model"] is None
+        manifest = _manifest(tmp_path)
+        assert manifest["source"].startswith("image3 _crf")
+        assert manifest["version"] == 2
+
+    def test_mjy_sr_peak_max_is_none(self):
+        from autoreduce.psf.frame_epsf import _native_peak_max
+        from autoreduce.psf.stars import StarSelection
+
+        assert _native_peak_max(
+            "MJy/sr", 515.4, instruments.get("nircam_lw"), StarSelection()
+        ) is None
+
+    def test_mixed_units_is_loud(self, no_cr, tmp_path):
+        from astropy.io import fits
+
+        p1 = tmp_path / "jw0001_nrcb1_crf.fits"
+        _jwst_hdul().writeto(p1)
+        hdul2 = _jwst_hdul(bunit="ELECTRONS")
+        p2 = tmp_path / "jw0002_nrcb1_crf.fits"
+        hdul2.writeto(p2)
+        spec = TargetSpec(name="t", ra=RA, dec=DEC, cutout_shape=(51, 51),
+                          instrument="nircam_lw", frame_products=True)
+        with pytest.raises(ValueError, match="heterogeneous"):
+            frames_mod.package_frame_products(
+                [p1, p2], spec, instruments.get("nircam_lw"),
+                tmp_path / "out", driz_cr_run=True,
+            )
+
+
+class TestRegistrationReliability:
+    def test_heavily_masked_pairs_flagged_and_excluded(self, no_cr, tmp_path, capsys):
+        # Both frames' cutouts hang mostly off-chip (JWST-style edge
+        # dithers): residuals are mask-geometry artifacts, so they must be
+        # flagged unreliable and the headline max must be an honest None.
+        from astropy.io import fits
+        from astropy.wcs import WCS
+
+        paths = []
+        for name, crpix_shift in (
+            ("j8aaaaaaq_flc.fits", (0.0, 0.0)),
+            ("j8bbbbbbq_flc.fits", (3.0, 2.0)),
+        ):
+            hdul = _frame_hdul(nchips=1, sci_value=40.0)
+            hdul[0].header["ROOTNAME"] = name.split("_")[0]
+            hdr = hdul["SCI", 1].header
+            hdr["CRPIX1"] += crpix_shift[1]
+            hdr["CRPIX2"] += crpix_shift[0]
+            _paint_blob(hdul, 1, RA, DEC)
+            rng = np.random.default_rng(len(paths))
+            hdul["SCI", 1].data += rng.normal(0.0, 2.0, hdul["SCI", 1].data.shape)
+            paths.append(tmp_path / name)
+            hdul.writeto(paths[-1])
+        # Aim the cutout near the chip corner: most of it is off-chip.
+        with fits.open(paths[0]) as hdul:
+            ra, dec = WCS(hdul["SCI", 1].header).pixel_to_world_values(3.0, 3.0)
+        spec = TargetSpec(
+            name="t", ra=float(ra), dec=float(dec), cutout_shape=(51, 51),
+            frame_products=True,
+        )
+        _run(tmp_path, paths, spec=spec)
+        manifest = _manifest(tmp_path)
+        assert manifest["max_registration_residual_px"] is None
+        assert all(
+            e["registration"]["residual_reliable"] is False
+            for e in manifest["frames"]
+        )
+        assert "UNMEASURED" in capsys.readouterr().out
+
+    def test_clean_pair_is_reliable(self, no_cr, tmp_path):
+        # The existing well-covered dithered pair: reliable flags set, and
+        # the headline max is numeric.
+        pair = TestRegistration()._dithered_pair(tmp_path)
+        _run(tmp_path, pair)
+        manifest = _manifest(tmp_path)
+        assert manifest["max_registration_residual_px"] is not None
+        assert all(
+            e["registration"]["residual_reliable"] is True
+            for e in manifest["frames"]
+        )

@@ -23,7 +23,18 @@ import numpy as np
 from ..instruments import InstrumentAdapter
 from ..target import TargetSpec
 from . import frame_epsf as frame_epsf_mod
-from .epsf import _fwhm_of, normalise_kernel
+from .epsf import normalise_kernel
+
+
+def _moment_fwhm(kernel: np.ndarray) -> float:
+    """Second-moment FWHM (2.3548·sigma) — detection-free, so it works on
+    undersampled kernels where a DAOFind-based estimate finds nothing."""
+    yy, xx = np.mgrid[0 : kernel.shape[0], 0 : kernel.shape[1]]
+    total = kernel.sum()
+    cy = (kernel * yy).sum() / total
+    cx = (kernel * xx).sum() / total
+    var = (kernel * ((yy - cy) ** 2 + (xx - cx) ** 2)).sum() / total / 2.0
+    return float(2.3548 * np.sqrt(max(var, 0.0)))
 
 
 def _drop_convolve(kernel: np.ndarray, pixfrac: float) -> np.ndarray:
@@ -137,11 +148,14 @@ def combined_mosaic_psf(
                 resampled = _resample_to_mosaic(
                     dropped, jac, spec.psf_full_shape
                 )
-                weight = float(primary.get("EXPTIME", 0.0))
+                from ..package.frames import _exposure_time
+
+                weight = _exposure_time(primary)
                 if weight <= 0.0:
                     raise ValueError(
-                        f"{rootname} chip {extver}: no positive EXPTIME to "
-                        "weight the PSF combination"
+                        f"{rootname} chip {extver}: no positive exposure time "
+                        "(EXPTIME/XPOSURE/EFFEXPTM) to weight the PSF "
+                        "combination"
                     )
                 contributions.append((resampled, weight))
                 per_frame.append({**entry, "weight_exptime": weight})
@@ -163,7 +177,7 @@ def combined_mosaic_psf(
         "weighting": "exptime",
         "pixfrac_drop_convolved": spec.final_pixfrac,
         "resample": "local-affine frame->mosaic Jacobian at the target",
-        "fwhm_pix": _fwhm_of(psf),
+        "moment_fwhm_pix": _moment_fwhm(psf),
         "frames": per_frame,
     }
     return psf, psf_full, diagnostics

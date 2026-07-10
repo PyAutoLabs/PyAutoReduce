@@ -30,12 +30,15 @@ from . import epsf as epsf_mod
 from . import stars as stars_mod
 
 
-def _native_peak_max(bunit: str, exptime: float, adapter, selection) -> float:
-    """The saturation cap in the frame's own units.
+def _native_peak_max(bunit: str, exptime: float, adapter, selection):
+    """The saturation cap in the frame's own units, or None.
 
     A star saturates when its rate fills the well within the exposure; the
     frame is a single exposure, so the cap is the fractional full well in
-    ELECTRONS, or that divided by EXPTIME for e-/s frames (WFC3/IR).
+    ELECTRONS, or that divided by EXPTIME for e-/s frames (WFC3/IR). For
+    surface-brightness frames (JWST MJy/sr) a full-well cut is meaningless
+    and saturated cores arrive blanked from level 2 — ``None`` disables the
+    cut, exactly as the mosaic path does.
     """
     cap = selection.saturation_fraction * adapter.saturation_dn
     unit = bunit.strip().upper()
@@ -48,9 +51,11 @@ def _native_peak_max(bunit: str, exptime: float, adapter, selection) -> float:
                 f"EXPTIME: {exptime}"
             )
         return cap / exptime
+    if unit == "MJY/SR":
+        return None
     raise ValueError(
-        f"unrecognised frame BUNIT {bunit!r} — expected ELECTRONS or "
-        f"ELECTRONS/S for HST calibrated products"
+        f"unrecognised frame BUNIT {bunit!r} — expected ELECTRONS[/S] (HST) "
+        "or MJy/sr (JWST) calibrated products"
     )
 
 
@@ -74,12 +79,21 @@ def build_frame_epsf(
     hdr = sci_hdu.header
     primary = hdul[0].header
 
-    # Sky-subtracted working image with DQ-flagged pixels local-median
-    # patched — estimator input only (see module docstring); the patch is
-    # smooth, so a patched hot pixel or cosmic ray cannot pass the star
-    # sharpness cuts, let alone bias a stamp.
-    work = sci_hdu.data.astype(float) - float(hdr.get("MDRIZSKY", 0.0))
-    bad = dq != 0
+    # Sky-subtracted working image with bad pixels local-median patched —
+    # estimator input only (see module docstring); the patch is smooth, so
+    # a patched hot pixel or cosmic ray cannot pass the star sharpness
+    # cuts, let alone bias a stamp. "Bad" follows the per-observatory DQ
+    # policy: HST bits all mark suspect data; JWST informational bits
+    # (JUMP_DET etc.) ride good pixels — patching those would smooth large
+    # fractions of a NIRCam chip, so only DO_NOT_USE is patched.
+    from ..package.frames import _exposure_time, _sky_level
+
+    sky, _ = _sky_level(primary, hdr)
+    work = sci_hdu.data.astype(float) - sky
+    if adapter.observatory == "jwst":
+        bad = (dq & 1) != 0
+    else:
+        bad = dq != 0
     n_patched = int(bad.sum())
     if n_patched:
         from scipy.ndimage import median_filter
@@ -94,7 +108,7 @@ def build_frame_epsf(
     selection = stars_mod.StarSelection()
     peak_max = _native_peak_max(
         str(hdr.get("BUNIT", "")),
-        float(primary.get("EXPTIME", 0.0)),
+        _exposure_time(primary),
         adapter,
         selection,
     )

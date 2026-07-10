@@ -225,6 +225,14 @@ def combine(
             ],
             "total_exptime": total_exptime,
             "out_shape": [out_ny, out_nx],
+            # The frame<->mosaic mapping constants (issue #33): with the
+            # offsets and the distortion tables these fully define the
+            # transform set — frame products invert it per frame, and the
+            # outlier pass resamples the mosaic through it.
+            "origin": [float(origin[0]), float(origin[1])],
+            "scale_ratio": float(scale_ratio),
+            "sci_path": str(sci_path),
+            "wht_path": str(wht_path),
         },
     )
     return sci_path, wht_path, provenance

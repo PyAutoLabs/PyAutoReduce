@@ -605,6 +605,26 @@ def _package_frames(ctx: _StageContext) -> None:
     """
     if not ctx.spec.frame_products:
         return
+    if ctx.adapter.observatory == "keck":
+        # The ground path packages the pipeline's own prepared frames
+        # (ctx.exposures after _ground_prepare) — offset-based registration,
+        # constructed noise, frame-vs-stack outlier masks, native tier-A
+        # PSF-star stamps (issue #33).
+        from .package import keck_frames as keck_frames_mod
+
+        fragment = keck_frames_mod.package_keck_frame_products(
+            ctx.exposures,
+            ctx.spec,
+            ctx.adapter,
+            ctx.out_dir,
+            drizzle_prov=ctx.record["drizzle"],
+            psf_star_frames=ctx.ground.get("psf_prepared") or [],
+            psf_star_mjds=ctx.ground.get("psf_mjds") or [],
+            psf_record=ctx.record.get("psf") or {},
+        )
+        ctx.record["frames"] = fragment
+        ctx.record["package"]["products"].append("frames/manifest.json")
+        return
     exposures = ctx.exposures
     driz_cr_run = not ctx.record["drizzle"]["single_exposure_branch"]
     if ctx.adapter.observatory == "jwst":
@@ -651,14 +671,20 @@ def reduce_target(
 ) -> Dict:
     """Run the full pipeline for one target; returns the provenance record."""
     adapter = instruments.get(spec.instrument)
-    if (spec.frame_products or spec.psf_from_frames) and getattr(
-        adapter, "observatory", None
-    ) not in ("hst", "jwst"):
-        # Fail before any download: ground-based analogues are open design
-        # questions, not silently-skipped options. JWST landed via the
-        # feasibility deltas (docs/design/jwst.md, issue #27).
+    observatory = getattr(adapter, "observatory", None)
+    # Fail before any download — unsupported combinations are loud design
+    # boundaries, not silently-skipped options.
+    if spec.frame_products and observatory not in ("hst", "jwst", "keck"):
         raise ValueError(
-            "frame_products / psf_from_frames support HST and JWST only "
+            "frame_products supports HST, JWST and Keck only "
+            f"(instrument {spec.instrument!r})"
+        )
+    if spec.psf_from_frames and observatory not in ("hst", "jwst"):
+        # The AO path's mosaic PSF is the tier-A epoch design
+        # (keck_ao.md); combining native star stamps into a drizzled
+        # kernel is not that design.
+        raise ValueError(
+            "psf_from_frames supports HST and JWST only "
             f"(instrument {spec.instrument!r})"
         )
     cache = cache_mod.ExposureCache(Path(cache_root), size_cap_bytes=size_cap_bytes)

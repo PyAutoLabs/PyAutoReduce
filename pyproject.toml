@@ -53,7 +53,7 @@ hst = ["drizzlepac>=3.5"]
 # drizzle resampler (also shipped inside drizzlepac/jwst).
 keck = ["pykoa>=1.7", "drizzle>=2.0"]
 # High-fidelity PSF reconstruction back-ends (tier 3 of the PSF design).
-psf = ["psfr"]
+psf = ["psfr", "stpsf"]
 # Per-exposure frame products: deep-learned per-frame cosmic-ray masks
 # (mask-only; pulls torch, hence not a base dependency). >=0.3 for the
 # ACS-WFC / WFC3-UVIS model registry names.

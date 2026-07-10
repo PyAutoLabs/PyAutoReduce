@@ -75,6 +75,18 @@ def _spec(**extra):
 
 
 @pytest.fixture
+def no_stpsf(monkeypatch):
+    """Tier-2b stubbed out: unit tests never run real STPSF (data files +
+    ~10s/frame); the fallback records an unavailable outcome instead."""
+    from autoreduce.psf import stpsf_model
+
+    def unavailable(*args, **kwargs):
+        raise ImportError("stpsf stubbed out in unit tests")
+
+    monkeypatch.setattr(stpsf_model, "model_frame_psf", unavailable)
+
+
+@pytest.fixture
 def no_cr(monkeypatch):
     """deepCR replaced by an all-clear masker (torch never imported)."""
     monkeypatch.setattr(
@@ -749,6 +761,7 @@ def _jwst_hdul(bunit="MJy/sr", xposure=515.4, bkglevel=0.21, shape=(200, 200)):
     )
 
 
+@pytest.mark.usefixtures("no_stpsf")
 class TestJwstFrames:
     def _run_jwst(self, tmp_path, hdul, name="jw01727043001_02101_00001_nrcb1_crf.fits",
                   driz_cr_run=True):
@@ -892,3 +905,67 @@ class TestRegistrationReliability:
             e["registration"]["residual_reliable"] is True
             for e in manifest["frames"]
         )
+
+
+class TestStpsfTier2b:
+    def _starless_jwst(self, tmp_path):
+        hdul = _jwst_hdul()
+        hdul[0].header["DETECTOR"] = "NRCB1"
+        path = tmp_path / "jw0009_nrcb1_crf.fits"
+        hdul.writeto(path)
+        return path
+
+    def test_jwst_fallback_to_stpsf_model(self, no_cr, monkeypatch, tmp_path):
+        from autoreduce.psf import frame_epsf, stpsf_model
+
+        kernel21 = np.zeros((21, 21)); kernel21[10, 10] = 1.0
+        kernel61 = np.zeros((61, 61)); kernel61[30, 30] = 1.0
+
+        def fake_model(primary, target_xy, spec, adapter, det_shape=None):
+            assert primary["DETECTOR"] == "NRCB1"
+            return kernel21, kernel61, {
+                "method": "stpsf-tier2b", "detector": "NRCB1",
+                "detector_position": list(target_xy), "caveat": "model-PSF fallback",
+            }
+
+        monkeypatch.setattr(stpsf_model, "model_frame_psf", fake_model)
+        from astropy.io import fits
+
+        path = self._starless_jwst(tmp_path)
+        with fits.open(path) as hdul:
+            psf, psf_full, diag = frame_epsf.build_frame_epsf(
+                hdul, 1, _spec(instrument="nircam_lw"), instruments.get("nircam_lw")
+            )
+        assert diag["method"] == "stpsf-tier2b"
+        assert "usable stars" in diag["tier1_reason"]
+        assert psf.shape == (21, 21) and psf_full.shape == (61, 61)
+
+    def test_missing_stpsf_recorded_not_fatal(self, no_cr, monkeypatch, tmp_path):
+        import sys
+
+        from astropy.io import fits
+        from autoreduce.psf import frame_epsf
+
+        monkeypatch.setitem(sys.modules, "stpsf", None)
+        path = self._starless_jwst(tmp_path)
+        with fits.open(path) as hdul:
+            psf, psf_full, diag = frame_epsf.build_frame_epsf(
+                hdul, 1, _spec(instrument="nircam_lw"), instruments.get("nircam_lw")
+            )
+        assert psf is None
+        assert diag["method"] == "none"
+        assert "unavailable" in diag["tier2b"]
+        assert "usable stars" in diag["reason"]
+
+    def test_hst_starless_stays_none(self, no_cr, tmp_path):
+        from astropy.io import fits
+        from autoreduce.psf import frame_epsf
+
+        path = _write_exposure(tmp_path, nchips=1)
+        with fits.open(path) as hdul:
+            psf, _, diag = frame_epsf.build_frame_epsf(
+                hdul, 1, _spec(), instruments.get("acs_wfc")
+            )
+        assert psf is None
+        assert diag["method"] == "none"
+        assert "tier2b" not in diag

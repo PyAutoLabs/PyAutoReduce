@@ -66,8 +66,17 @@ ratios against the demo products (the SLACS-parity method).
 | 2b | STPSF model PSF | fallback only when the field lacks stars — flagged in provenance, never silent (the literature's consistent verdict: empirical beats model for decomposition) |
 | 3 | STARRED / PSFr iterative reconstruction | lensed quasars/AGN, unchanged from the HST design |
 
-Phase 3 ships tier 1; tiers 2/2b are the follow-up (PSFEx/ShOpt are external
-binaries/Julia — an integration decision for a dedicated prompt).
+Phase 3 ships tier 1; tier 2 (PSFEx/ShOpt) is the follow-up (external
+binaries/Julia — an integration decision for a dedicated prompt). **Tier 2b
+is live for frame products (issue #29):** `psf/stpsf_model.py` evaluates
+STPSF at the frame's detector + target position and ships the `DET_DIST`
+extension — detector-sampled *including geometric distortion*, the correct
+kernel for native-frame products — whenever a frame's own star field cannot
+support the tier-1 ePSF. The literature caveat rides the diagnostics, and a
+missing stpsf install is a recorded outcome. Local gotcha: poppy
+auto-detects cupy and JIT-compiles CUDA kernels that fail on this WSL2
+toolchain — the wrapper pins `poppy.conf.use_cupy = False` (CPU FFTs are
+ample at these fov sizes).
 
 ## Per-exposure frame products — feasibility (issue #24, 2026-07-10)
 

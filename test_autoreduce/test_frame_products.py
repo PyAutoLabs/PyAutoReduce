@@ -167,7 +167,10 @@ class TestFrameProducts:
         from astropy.io import fits
 
         exposure = _write_exposure(
-            tmp_path, bunit="ELECTRONS/S", sci_value=0.25, err_value=0.01,
+            tmp_path,
+            bunit="ELECTRONS/S",
+            sci_value=0.25,
+            err_value=0.01,
             mdrizsky=0.05,
         )
         _run(tmp_path, [exposure])
@@ -237,7 +240,10 @@ class TestFrameProducts:
         with fits.open(path) as hdul:
             ra, dec = WCS(hdul["SCI", 1].header).pixel_to_world_values(5.0, 100.0)
         spec = TargetSpec(
-            name="t", ra=float(ra), dec=float(dec), cutout_shape=(51, 51),
+            name="t",
+            ra=float(ra),
+            dec=float(dec),
+            cutout_shape=(51, 51),
             frame_products=True,
         )
         _run(tmp_path, [path], spec=spec)
@@ -366,12 +372,16 @@ class TestPipelinePlumbing:
 
         monkeypatch.setattr(pipeline_mod, "_combine", fake_combine)
         monkeypatch.setattr(
-            pipeline_mod, "_noise", lambda ctx, *a: (order.append("noise"), np.ones((5, 5)))[1]
+            pipeline_mod,
+            "_noise",
+            lambda ctx, *a: (order.append("noise"), np.ones((5, 5)))[1],
         )
         monkeypatch.setattr(
             pipeline_mod,
             "_psf",
-            lambda ctx, *a: (order.append("psf"), (np.ones((3, 3)), np.ones((5, 5))))[1],
+            lambda ctx, *a: (order.append("psf"), (np.ones((3, 3)), np.ones((5, 5))))[
+                1
+            ],
         )
 
         def fake_package(ctx, *args):
@@ -383,7 +393,9 @@ class TestPipelinePlumbing:
             pipeline_mod, "_evict", lambda *a, **k: order.append("evict")
         )
 
-        def fake_frames(exposures, spec, adapter, out_dir, driz_cr_run, source_note=None):
+        def fake_frames(
+            exposures, spec, adapter, out_dir, driz_cr_run, source_note=None
+        ):
             order.append("frames")
             return {"n_chips_written": 2, "driz_cr_run": driz_cr_run}
 
@@ -412,9 +424,16 @@ class TestPipelinePlumbing:
     def test_non_hst_flag_is_loud_before_any_stage(self, tmp_path):
         from autoreduce import pipeline as pipeline_mod
 
-        spec = TargetSpec(name="t", ra=RA, dec=DEC, instrument="alma",
-                          alma_uids=("A1",), alma_field="F", alma_spws=("1",),
-                          frame_products=True)
+        spec = TargetSpec(
+            name="t",
+            ra=RA,
+            dec=DEC,
+            instrument="alma",
+            alma_uids=("A1",),
+            alma_field="F",
+            alma_spws=("1",),
+            frame_products=True,
+        )
         with pytest.raises(ValueError, match="HST, JWST and Keck"):
             pipeline_mod.reduce_target(
                 spec, cache_root=tmp_path / "cache", output_root=tmp_path / "out"
@@ -428,9 +447,7 @@ class TestSpecField:
 
     def test_yaml_round_trip(self, tmp_path):
         path = tmp_path / "spec.yaml"
-        path.write_text(
-            "name: t\nra: 2.0\ndec: -0.1\nframe_products: true\n"
-        )
+        path.write_text("name: t\nra: 2.0\ndec: -0.1\nframe_products: true\n")
         spec = TargetSpec.from_yaml(path)
         assert spec.frame_products is True
         assert spec.as_dict()["frame_products"] is True
@@ -483,7 +500,12 @@ class TestRegistration:
                 (-0.3 * arcsec, -0.4 * arcsec, 1.2, 220.0),
             ):
                 _paint_blob(
-                    hdul, 1, RA + dra, DEC + ddec, sigma=sigma, amp=amp,
+                    hdul,
+                    1,
+                    RA + dra,
+                    DEC + ddec,
+                    sigma=sigma,
+                    amp=amp,
                     offset_px=off,
                 )
             # Independent noise per frame — a shared field would itself
@@ -536,7 +558,9 @@ class TestRegistration:
         hdul = _frame_hdul(nchips=1)
         hdr = hdul["SCI", 1].header
         hdr["WCSNAME"] = "IDC_x-FIT_REL_GSC242"
-        hdr["WCSTYPE"] = "undistorted a posteriori solution relatively aligned to GSC242"
+        hdr["WCSTYPE"] = (
+            "undistorted a posteriori solution relatively aligned to GSC242"
+        )
         hdr["RMS_RA"] = 44.5
         hdr["RMS_DEC"] = 42.0
         hdr["NMATCHES"] = 30
@@ -615,7 +639,9 @@ class TestFramePsf:
         psf = fits.getdata(chip_dir / "psf.fits").astype(float)
         assert psf.shape == (21, 21)
         assert psf.sum() == pytest.approx(1.0, abs=1e-4)
-        assert (tmp_path / "out" / "frames" / "j8pu42vlq_chip1" / "psf_full.fits").exists()
+        assert (
+            tmp_path / "out" / "frames" / "j8pu42vlq_chip1" / "psf_full.fits"
+        ).exists()
 
     def test_dq_flagged_spike_is_patched_away(self, no_cr, tmp_path):
         # A CR-like flagged spike is local-median patched out of the
@@ -666,9 +692,11 @@ class TestPsfFromFrames:
         kernel /= kernel.sum()
         out = _drop_convolve(kernel, pixfrac=0.8)
         assert out.sum() == pytest.approx(1.0, abs=1e-8)
+
         # Second moment grows by the box variance pixfrac^2/12 per axis.
         def var_y(k):
             return float((k * (yy - 15) ** 2).sum() / k.sum())
+
         assert var_y(out) - var_y(kernel) == pytest.approx(0.8**2 / 12.0, rel=0.05)
 
     def test_local_jacobian_scale(self):
@@ -764,16 +792,28 @@ def _jwst_hdul(bunit="MJy/sr", xposure=515.4, bkglevel=0.21, shape=(200, 200)):
 
 @pytest.mark.usefixtures("no_stpsf")
 class TestJwstFrames:
-    def _run_jwst(self, tmp_path, hdul, name="jw01727043001_02101_00001_nrcb1_crf.fits",
-                  driz_cr_run=True):
+    def _run_jwst(
+        self,
+        tmp_path,
+        hdul,
+        name="jw01727043001_02101_00001_nrcb1_crf.fits",
+        driz_cr_run=True,
+    ):
         path = tmp_path / name
         hdul.writeto(path)
         spec = TargetSpec(
-            name="t", ra=RA, dec=DEC, cutout_shape=(51, 51),
-            instrument="nircam_lw", frame_products=True,
+            name="t",
+            ra=RA,
+            dec=DEC,
+            cutout_shape=(51, 51),
+            instrument="nircam_lw",
+            frame_products=True,
         )
         return frames_mod.package_frame_products(
-            [path], spec, instruments.get("nircam_lw"), tmp_path / "out",
+            [path],
+            spec,
+            instruments.get("nircam_lw"),
+            tmp_path / "out",
             driz_cr_run=driz_cr_run,
             source_note="image3 _crf products (outlier-flagged, tweakreg WCS)",
         )
@@ -835,9 +875,12 @@ class TestJwstFrames:
         from autoreduce.psf.frame_epsf import _native_peak_max
         from autoreduce.psf.stars import StarSelection
 
-        assert _native_peak_max(
-            "MJy/sr", 515.4, instruments.get("nircam_lw"), StarSelection()
-        ) is None
+        assert (
+            _native_peak_max(
+                "MJy/sr", 515.4, instruments.get("nircam_lw"), StarSelection()
+            )
+            is None
+        )
 
     def test_mixed_units_is_loud(self, no_cr, tmp_path):
         from astropy.io import fits
@@ -847,12 +890,21 @@ class TestJwstFrames:
         hdul2 = _jwst_hdul(bunit="ELECTRONS")
         p2 = tmp_path / "jw0002_nrcb1_crf.fits"
         hdul2.writeto(p2)
-        spec = TargetSpec(name="t", ra=RA, dec=DEC, cutout_shape=(51, 51),
-                          instrument="nircam_lw", frame_products=True)
+        spec = TargetSpec(
+            name="t",
+            ra=RA,
+            dec=DEC,
+            cutout_shape=(51, 51),
+            instrument="nircam_lw",
+            frame_products=True,
+        )
         with pytest.raises(ValueError, match="heterogeneous"):
             frames_mod.package_frame_products(
-                [p1, p2], spec, instruments.get("nircam_lw"),
-                tmp_path / "out", driz_cr_run=True,
+                [p1, p2],
+                spec,
+                instruments.get("nircam_lw"),
+                tmp_path / "out",
+                driz_cr_run=True,
             )
 
 
@@ -883,15 +935,17 @@ class TestRegistrationReliability:
         with fits.open(paths[0]) as hdul:
             ra, dec = WCS(hdul["SCI", 1].header).pixel_to_world_values(3.0, 3.0)
         spec = TargetSpec(
-            name="t", ra=float(ra), dec=float(dec), cutout_shape=(51, 51),
+            name="t",
+            ra=float(ra),
+            dec=float(dec),
+            cutout_shape=(51, 51),
             frame_products=True,
         )
         _run(tmp_path, paths, spec=spec)
         manifest = _manifest(tmp_path)
         assert manifest["max_registration_residual_px"] is None
         assert all(
-            e["registration"]["residual_reliable"] is False
-            for e in manifest["frames"]
+            e["registration"]["residual_reliable"] is False for e in manifest["frames"]
         )
         assert "UNMEASURED" in capsys.readouterr().out
 
@@ -903,8 +957,7 @@ class TestRegistrationReliability:
         manifest = _manifest(tmp_path)
         assert manifest["max_registration_residual_px"] is not None
         assert all(
-            e["registration"]["residual_reliable"] is True
-            for e in manifest["frames"]
+            e["registration"]["residual_reliable"] is True for e in manifest["frames"]
         )
 
 
@@ -919,15 +972,23 @@ class TestStpsfTier2b:
     def test_jwst_fallback_to_stpsf_model(self, no_cr, monkeypatch, tmp_path):
         from autoreduce.psf import frame_epsf, stpsf_model
 
-        kernel21 = np.zeros((21, 21)); kernel21[10, 10] = 1.0
-        kernel61 = np.zeros((61, 61)); kernel61[30, 30] = 1.0
+        kernel21 = np.zeros((21, 21))
+        kernel21[10, 10] = 1.0
+        kernel61 = np.zeros((61, 61))
+        kernel61[30, 30] = 1.0
 
         def fake_model(primary, target_xy, spec, adapter, det_shape=None):
             assert primary["DETECTOR"] == "NRCB1"
-            return kernel21, kernel61, {
-                "method": "stpsf-tier2b", "detector": "NRCB1",
-                "detector_position": list(target_xy), "caveat": "model-PSF fallback",
-            }
+            return (
+                kernel21,
+                kernel61,
+                {
+                    "method": "stpsf-tier2b",
+                    "detector": "NRCB1",
+                    "detector_position": list(target_xy),
+                    "caveat": "model-PSF fallback",
+                },
+            )
 
         monkeypatch.setattr(stpsf_model, "model_frame_psf", fake_model)
         from astropy.io import fits
@@ -973,8 +1034,9 @@ class TestStpsfTier2b:
 
 
 class TestKeckFrames:
-    def _prepared_frame(self, tmp_path, name, dy=0.0, dx=0.0, spike=None,
-                        shape=(200, 200), mjd=55376.44):
+    def _prepared_frame(
+        self, tmp_path, name, dy=0.0, dx=0.0, spike=None, shape=(200, 200), mjd=55376.44
+    ):
         """Prepared-NIRC2-like frame: single HDU, ELECTRONS, sky-subtracted,
         NaN bad pixels, per-frame facts in the header. A Gaussian blob sits
         at frame centre + (dy, dx) so the recorded offsets are truth."""
@@ -1004,8 +1066,9 @@ class TestKeckFrames:
         fits.PrimaryHDU(frame.astype(np.float32), header=header).writeto(path)
         return path
 
-    def _run_keck(self, tmp_path, spike=None, psf_frames=(), psf_mjds=(),
-                  psf_record=None):
+    def _run_keck(
+        self, tmp_path, spike=None, psf_frames=(), psf_mjds=(), psf_record=None
+    ):
         from astropy.io import fits
         from astropy.wcs import WCS
         from autoreduce.package import keck_frames as keck_mod
@@ -1013,8 +1076,9 @@ class TestKeckFrames:
         offsets = [(0.0, 0.0), (3.0, -2.0)]
         paths = [
             self._prepared_frame(tmp_path, "N2.1_prep.fits", 0.0, 0.0),
-            self._prepared_frame(tmp_path, "N2.2_prep.fits", 3.0, -2.0,
-                                 spike=spike, mjd=55376.45),
+            self._prepared_frame(
+                tmp_path, "N2.2_prep.fits", 3.0, -2.0, spike=spike, mjd=55376.45
+            ),
         ]
         # Mosaic: the blob at the grid centre, cps units, WCS TAN at target.
         shape = (240, 240)
@@ -1044,14 +1108,22 @@ class TestKeckFrames:
             "distortion_files": ["dist_x.fits", "dist_y.fits"],
         }
         spec = TargetSpec(
-            name="t", ra=RA, dec=DEC, cutout_shape=(51, 51),
-            instrument="nirc2_narrow", final_scale=0.009942,
+            name="t",
+            ra=RA,
+            dec=DEC,
+            cutout_shape=(51, 51),
+            instrument="nirc2_narrow",
+            final_scale=0.009942,
             frame_products=True,
         )
         return keck_mod.package_keck_frame_products(
-            paths, spec, instruments.get("nirc2_narrow"), tmp_path / "out",
+            paths,
+            spec,
+            instruments.get("nirc2_narrow"),
+            tmp_path / "out",
             drizzle_prov=drizzle_prov,
-            psf_star_frames=list(psf_frames), psf_star_mjds=list(psf_mjds),
+            psf_star_frames=list(psf_frames),
+            psf_star_mjds=list(psf_mjds),
             psf_record=psf_record or {},
         )
 
@@ -1100,7 +1172,9 @@ class TestKeckFrames:
         from astropy.io import fits
 
         yy, xx = np.mgrid[0:200, 0:200]
-        star = 5.0e4 * np.exp(-(((yy - 99.0) ** 2 + (xx - 101.0) ** 2) / (2.0 * 2.0**2)))
+        star = 5.0e4 * np.exp(
+            -(((yy - 99.0) ** 2 + (xx - 101.0) ** 2) / (2.0 * 2.0**2))
+        )
         fragment = self._run_keck(
             tmp_path,
             psf_frames=[star],
@@ -1111,9 +1185,9 @@ class TestKeckFrames:
         e = _manifest(tmp_path)["frames"][0]
         assert e["psf"]["method"].startswith("tier-A star frame stamp")
         assert e["psf"]["psf_provisional"] is True
-        psf = fits.getdata(
-            tmp_path / "out" / "frames" / e["dir"] / "psf.fits"
-        ).astype(float)
+        psf = fits.getdata(tmp_path / "out" / "frames" / e["dir"] / "psf.fits").astype(
+            float
+        )
         assert psf.shape == (21, 21)
         assert psf.sum() == pytest.approx(1.0, abs=1e-4)
 
@@ -1126,9 +1200,77 @@ class TestKeckFrames:
     def test_psf_from_frames_stays_hst_jwst(self, tmp_path):
         from autoreduce import pipeline as pipeline_mod
 
-        spec = TargetSpec(name="t", ra=RA, dec=DEC, instrument="nirc2_narrow",
-                          psf_from_frames=True)
+        spec = TargetSpec(
+            name="t", ra=RA, dec=DEC, instrument="nirc2_narrow", psf_from_frames=True
+        )
         with pytest.raises(ValueError, match="HST and JWST only"):
             pipeline_mod.reduce_target(
                 spec, cache_root=tmp_path / "c", output_root=tmp_path / "o"
             )
+
+
+class TestStarredFrameBackend:
+    """Tier-1b native-pixel STARRED frame back-end (psf_backend='starred', #41).
+
+    The star selection and delivery are shared with the mosaic back-end and
+    exercised there; here we cover the frame plumbing — the shared preprocessing
+    exposes an ERR array, and selecting the back-end without the optional extra
+    is a loud hard stop (never a silent fall-through to the photutils Tier-1)."""
+
+    def test_prepare_frame_exposes_err_and_context(self, tmp_path):
+        from astropy.io import fits
+
+        from autoreduce.psf.frame_epsf import _prepare_frame
+
+        path = _write_exposure(tmp_path, nchips=1)
+        with fits.open(path) as hdul:
+            work, err, found, n_patched, primary, target_xy, det_shape = _prepare_frame(
+                hdul, 1, _spec(), instruments.get("acs_wfc")
+            )
+        assert err is not None and err.shape == work.shape  # STARRED noise source
+        assert det_shape == work.shape
+        assert len(target_xy) == 2 and n_patched >= 0
+
+    def test_frame_backend_missing_extra_is_hard_stop(self, tmp_path):
+        try:
+            import starred  # noqa: F401
+        except ImportError:
+            from astropy.io import fits
+
+            from autoreduce.psf.starred_epsf import (
+                StarredUnavailableError,
+                build_starred_frame_epsf,
+            )
+
+            path = _write_exposure(tmp_path, nchips=1)
+            with fits.open(path) as hdul:
+                with pytest.raises(StarredUnavailableError, match="not installed"):
+                    build_starred_frame_epsf(
+                        hdul, 1, _spec(), instruments.get("acs_wfc")
+                    )
+        else:
+            pytest.skip("starred installed; guard path not exercised")
+
+    def test_dispatch_routes_to_starred_backend(self, tmp_path):
+        # _frame_psf must honour spec.psf_backend='starred'; with the extra
+        # absent that surfaces as the loud StarredUnavailableError, proving the
+        # route (a photutils fall-through would instead build or return None).
+        try:
+            import starred  # noqa: F401
+        except ImportError:
+            from astropy.io import fits
+
+            from autoreduce.psf.starred_epsf import StarredUnavailableError
+
+            path = _write_exposure(tmp_path, nchips=1)
+            with fits.open(path) as hdul:
+                with pytest.raises(StarredUnavailableError):
+                    frames_mod._frame_psf(
+                        hdul,
+                        1,
+                        _spec(psf_backend="starred"),
+                        instruments.get("acs_wfc"),
+                        tmp_path,
+                    )
+        else:
+            pytest.skip("starred installed; guard path not exercised")

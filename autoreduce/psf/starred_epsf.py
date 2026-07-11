@@ -43,11 +43,17 @@ import numpy as np
 
 from .epsf import InsufficientStarsError
 
-__all__ = ["StarredUnavailableError", "build_starred_epsf"]
+__all__ = [
+    "StarredUnavailableError",
+    "build_starred_epsf",
+    "build_starred_frame_epsf",
+]
 
-MIN_STARS = 8               # match the Tier-1 floor; STARRED works from ~6 but be conservative
-STAMP_PAD = 8               # star-cutout pad beyond the extended kernel (centroid-crop margin)
-UNDERSAMPLED_FWHM_PX = 1.6  # below this STARRED broadens (~24% at 1.3px) -> flag, don't ship silently
+MIN_STARS = 8  # match the Tier-1 floor; STARRED works from ~6 but be conservative
+STAMP_PAD = 8  # star-cutout pad beyond the extended kernel (centroid-crop margin)
+UNDERSAMPLED_FWHM_PX = (
+    1.6  # below this STARRED broadens (~24% at 1.3px) -> flag, don't ship silently
+)
 
 
 def _stamp_for(psf_full_shape):
@@ -89,8 +95,10 @@ def _extract_cutouts(sci, noise, stars_table, stamp):
     ny, nx = sci.shape
     h = stamp // 2
     sci_cuts, noise_cuts = [], []
-    for x, y in zip(np.asarray(stars_table["xcentroid"], dtype=float),
-                    np.asarray(stars_table["ycentroid"], dtype=float)):
+    for x, y in zip(
+        np.asarray(stars_table["xcentroid"], dtype=float),
+        np.asarray(stars_table["ycentroid"], dtype=float),
+    ):
         ix, iy = int(round(x)), int(round(y))
         if ix - h < 0 or iy - h < 0 or ix + h > nx or iy + h > ny:
             continue
@@ -158,7 +166,12 @@ def _deliver(psf_supersampled, subsampling, shape):
     cy, cx = _core_centroid(grid)
     icy, icx = int(round(cy)), int(round(cx))
     hy, hx = shape[0] // 2, shape[1] // 2
-    if icy - hy < 0 or icx - hx < 0 or icy + hy + 1 > grid.shape[0] or icx + hx + 1 > grid.shape[1]:
+    if (
+        icy - hy < 0
+        or icx - hx < 0
+        or icy + hy + 1 > grid.shape[0]
+        or icx + hx + 1 > grid.shape[1]
+    ):
         raise ValueError(
             f"delivered kernel {shape} does not fit around the PSF centroid in the "
             f"downsampled grid {grid.shape}; increase the STARRED stamp/subsampling"
@@ -240,3 +253,96 @@ def build_starred_epsf(
         ),
     }
     return psf, psf_full, diagnostics
+
+
+def build_starred_frame_epsf(
+    hdul,
+    extver: int,
+    spec,
+    adapter,
+    subsampling: int = 2,
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Dict]:
+    """Tier-1b native-pixel STARRED ePSF for one calibrated frame (frame-products
+    mode). Mirrors :func:`frame_epsf.build_frame_epsf`'s contract: returns
+    ``(None, None, diagnostics)`` when too few usable stars survive — a single
+    exposure legitimately may lack stars, so that is a recorded outcome, not a
+    hard stop (only a missing optional extra is).
+
+    Unlike the mosaic back-end there is **no drizzle-consistency resample** — the
+    frame PSF stays on the frame's own native, distorted pixel grid, delivered
+    by the same super-sample downsample + centroid-preserving crop. Per-star
+    noise weights come from the frame's ERR extension.
+
+    NB the #37/#39 regime finding: STARRED broadens on undersampled PSFs, and
+    native frames are less well-sampled than the drizzled mosaic. Prefer this for
+    well-sampled frames; the `undersampled` diagnostic flags the risky regime.
+    """
+    from .frame_epsf import _prepare_frame
+
+    starred = _require_starred()  # loud if the optional GPL/JAX extra is absent
+    work, err, found, n_patched, _primary, _target_xy, _det_shape = _prepare_frame(
+        hdul, extver, spec, adapter
+    )
+    if err is None:
+        raise ValueError(
+            "STARRED frame back-end needs a per-pixel ERR extension for star "
+            "noise weighting; this frame carries none"
+        )
+
+    n_cand = 0 if found is None else len(found)
+    if n_cand < MIN_STARS:
+        return (
+            None,
+            None,
+            {
+                "method": "none",
+                "reason": f"{n_cand} star candidates (< {MIN_STARS}); STARRED frame ePSF not viable",
+                "n_patched_pixels": n_patched,
+            },
+        )
+
+    from starred.procedures.psf_routines import build_psf
+
+    stamp = _stamp_for(spec.psf_full_shape)
+    cutouts, noisemaps = _extract_cutouts(work, err, found, stamp)
+    if len(cutouts) < MIN_STARS:
+        return (
+            None,
+            None,
+            {
+                "method": "none",
+                "reason": f"{len(cutouts)} usable star cutouts (< {MIN_STARS}) after edge/finite cut",
+                "n_patched_pixels": n_patched,
+            },
+        )
+
+    result = build_psf(
+        image=np.asarray(cutouts, dtype=float),
+        noisemap=np.asarray(noisemaps, dtype=float),
+        subsampling_factor=subsampling,
+        adjust_sky=True,
+    )
+    full_ss = np.asarray(result["full_psf"], dtype=float)
+    psf_full = _deliver(full_ss, subsampling, spec.psf_full_shape)
+    psf = _deliver(full_ss, subsampling, spec.psf_shape)
+
+    fwhm = _size_fwhm(psf)
+    dcy, dcx = _core_centroid(psf)
+    return (
+        psf,
+        psf_full,
+        {
+            "method": "starred-frame-tier1b",
+            "starred_version": str(getattr(starred, "__version__", None) or "unknown"),
+            "n_stars_used": int(len(cutouts)),
+            "subsampling": int(subsampling),
+            "delivery": "native downsample+centroid-recentre",
+            "sampling_fwhm_px": fwhm,
+            "undersampled": bool(fwhm < UNDERSAMPLED_FWHM_PX),
+            "n_patched_pixels": n_patched,
+            "cr_screen": "DQ-patched" if n_patched else "shape-cuts-only",
+            "centroid_residual_px": float(
+                np.hypot(dcy - (psf.shape[0] - 1) / 2, dcx - (psf.shape[1] - 1) / 2)
+            ),
+        },
+    )

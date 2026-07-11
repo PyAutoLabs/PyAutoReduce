@@ -54,6 +54,10 @@ hst = ["drizzlepac>=3.5"]
 keck = ["pykoa>=1.7", "drizzle>=2.0"]
 # High-fidelity PSF reconstruction back-ends (tier 3 of the PSF design).
 psf = ["psfr", "stpsf"]
+# Tier-1b super-sampled ePSF back-end (autoreduce/psf/starred_epsf.py, #35).
+# GPL-3.0-or-later + JAX, so isolated as an optional extra and imported lazily;
+# never a base dependency. autoreduce has no astropy/scipy caps, so it coexists.
+starred = ["starred-astro>=1.6"]
 # Per-exposure frame products: deep-learned per-frame cosmic-ray masks
 # (mask-only; pulls torch, hence not a base dependency). >=0.3 for the
 # ACS-WFC / WFC3-UVIS model registry names.

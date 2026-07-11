@@ -9,6 +9,11 @@ registered ratios — the SLACS parity method). SW bands (F115W/F150W) output
 
 Run:  ~/venv/PyAuto/bin/python scripts/reduce_cosmos_web_ring.py --band F444W
 Network + jwst pipeline required; unit tests never import this.
+
+PSF back-end (issue #35): ``--psf-backend starred`` selects the optional
+Tier-1b STARRED super-sampled ePSF instead of the photutils Tier-1 default.
+STARRED is GPL/JAX and shipped as an extra — install ``pyautoreduce[starred]``
+(it coexists with the reduction stack; autoreduce has no astropy/scipy caps).
 """
 
 import argparse
@@ -33,7 +38,7 @@ DEMO_ROOT = Path(
 BANDS = ("F115W", "F150W", "F277W", "F444W")
 
 
-def spec_for(band: str) -> TargetSpec:
+def spec_for(band: str, psf_backend: str = "epsf") -> TargetSpec:
     adapter = nircam_adapter_for_filter(band)
     # Demo cutouts: SW 419x419 @0.03 (12.57"), LW 209x209 @0.06 (12.54") —
     # match the demo shapes exactly so parity is pixel-to-pixel.
@@ -51,6 +56,7 @@ def spec_for(band: str) -> TargetSpec:
         final_scale=adapter.recommended_final_scale,
         final_pixfrac=1.0,  # COSMOS-Web mosaics use the full drop
         cutout_shape=shape,
+        psf_backend=psf_backend,  # "epsf" (default) | "starred" (Tier-1b, #35)
     )
 
 
@@ -73,11 +79,16 @@ def compare(band: str, out_dir: Path) -> dict:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--band", required=True, choices=[*BANDS, "all"])
+    parser.add_argument(
+        "--psf-backend", default="epsf", choices=["epsf", "starred"],
+        help="PSF back-end: photutils Tier-1 (default) or STARRED Tier-1b (#35; "
+        "needs the pyautoreduce[starred] extra)",
+    )
     args = parser.parse_args()
     bands = BANDS if args.band == "all" else (args.band,)
 
     for band in bands:
-        spec = spec_for(band)
+        spec = spec_for(band, psf_backend=args.psf_backend)
         record = reduce_target(spec, cache_root=CACHE_ROOT, output_root=OUTPUT_ROOT)
         out_dir = OUTPUT_ROOT / spec.name
         summary = {

@@ -13,6 +13,13 @@ from autoreduce.psf.stars import (
     reject_near,
 )
 from autoreduce.psf.fallback import ModelPSFUnavailableError, model_psf
+from autoreduce.psf.starred_epsf import (
+    StarredUnavailableError,
+    _core_centroid,
+    _deliver,
+    _downsample_box,
+    build_starred_epsf,
+)
 
 
 class TestStarCuts:
@@ -63,6 +70,72 @@ class TestTierFailuresAreLoud:
     def test_tier2_unimplemented_is_hard_stop(self):
         with pytest.raises(ModelPSFUnavailableError, match="hard stop"):
             model_psf("lens", "F814W", (21, 21), (61, 61))
+
+
+class TestStarredTier1bSeam:
+    """The optional Tier-1b STARRED back-end (PyAutoReduce#35). The star guard
+    and the centroid-preserving delivery are numpy-only and tested here; the
+    STARRED reconstruction itself needs the GPL/JAX extra (importorskip)."""
+
+    def _star_table(self, n, shape=(200, 200)):
+        from astropy.table import Table
+
+        rng = np.random.default_rng(1)
+        ny, nx = shape
+        return Table(
+            {
+                "xcentroid": rng.uniform(40, nx - 40, n),
+                "ycentroid": rng.uniform(40, ny - 40, n),
+            }
+        )
+
+    def test_too_few_stars_is_a_loud_hard_stop(self):
+        # Runs before the STARRED import, so it is loud with or without the
+        # extra — never a silent degradation to Tier 1.
+        with pytest.raises(InsufficientStarsError, match="STARRED Tier-1b"):
+            build_starred_epsf(
+                np.zeros((200, 200)), np.ones((200, 200)), self._star_table(3),
+                (21, 21), (61, 61),
+            )
+
+    def test_missing_extra_is_a_hard_stop_with_enough_stars(self):
+        try:
+            import starred  # noqa: F401
+        except ImportError:
+            with pytest.raises(StarredUnavailableError, match="not installed"):
+                build_starred_epsf(
+                    np.zeros((200, 200)), np.ones((200, 200)), self._star_table(12),
+                    (21, 21), (61, 61),
+                )
+        else:
+            pytest.skip("starred installed; install-guard path not exercised")
+
+    def test_delivery_recenters_onto_the_central_pixel(self):
+        # An ASYMMETRIC PSF (core + off-centre wing) deliberately off the
+        # super-grid centre: naive cropping leaves it off-centre, and a *global*
+        # centre of mass is biased by the wing (the 0.69px failure the #35
+        # end-to-end run exposed). _deliver must centre on the core -> peak on
+        # the odd kernel's central pixel.
+        n = 140  # matches the real super-grid size (stamp 70 * subsampling 2)
+        yy, xx = np.mgrid[0:n, 0:n].astype(float)
+        cy, cx = n / 2 + 5.3, n / 2 - 3.6  # core off-centre by a non-integer amount
+        core = np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 4.0**2))
+        wing = 0.15 * np.exp(-((yy - cy - 22) ** 2 + (xx - cx - 16) ** 2) / (2 * 9.0**2))
+        kernel = _deliver(core + wing, subsampling=2, shape=(21, 21))
+        assert kernel.shape == (21, 21)
+        assert np.isclose(kernel.sum(), 1.0)
+        # The PSF is centred on its CORE (peak on the central pixel; core
+        # centroid ~0) — NOT its global centre of mass, which the wing offsets
+        # by >1px and which it would be wrong to force to the middle.
+        assert np.unravel_index(int(np.argmax(kernel)), kernel.shape) == (10, 10)
+        cy, cx = _core_centroid(kernel)
+        assert np.hypot(cy - 10, cx - 10) < 0.1  # this wing is deliberately harsh; real PSFs land ~0.01
+
+    def test_downsample_box_shape_and_mean(self):
+        img = np.arange(64, dtype=float).reshape(8, 8)
+        ds = _downsample_box(img, 2)
+        assert ds.shape == (4, 4)
+        assert np.isclose(ds[0, 0], img[:2, :2].mean())
 
 
 class TestCutout:

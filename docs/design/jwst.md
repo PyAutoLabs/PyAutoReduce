@@ -64,7 +64,8 @@ ratios against the demo products (the SLACS-parity method).
 | 1 | single ePSF from mosaic stars (current photutils implementation) | **LW bands** (F277W/F444W): spatial variation ≲1% RMS — a single ePSF at the lens position is adequate for lens-galaxy work |
 | 2 | **spatially-varying empirical model evaluated at the lens position** — PSFEx-style polynomial (PSFEx or ShOpt back-end) | **SW bands** (F115W/F150W: ~5% RMS variation) and any weak-lensing-grade use; photutils ranks below PSFEx in the Zhuang & Shen benchmark, so this is the quality upgrade path |
 | 2b | STPSF model PSF | fallback only when the field lacks stars — flagged in provenance, never silent (the literature's consistent verdict: empirical beats model for decomposition) |
-| 3 | STARRED / PSFr iterative reconstruction | lensed quasars/AGN, unchanged from the HST design |
+| 1b | STARRED super-sampled ePSF from field stars (Moffat + starlet residuals; optional, GPL/JAX-isolated) | higher-fidelity alternative to Tier 1 for demanding quasar/AGN or weak-lensing-grade work — reduction-stage, uses the same stars (`hst_acs_pipeline.md` Tier 1b, PyAutoReduce#35) |
+| — | *target-based* reconstruction (PSFr / STARRED two-channel deconvolution of the lensed images) | **not a reduction tier** — modelling-stage, out of scope (as `keck_ao.md` Tier C); corrects the earlier "STARRED = Tier 3 point-source" framing |
 
 Phase 3 ships tier 1; tier 2 (PSFEx/ShOpt) is the follow-up (external
 binaries/Julia — an integration decision for a dedicated prompt). **Tier 2b

@@ -451,7 +451,7 @@ def _noise(ctx: _StageContext, sci, wht, exptime: float) -> np.ndarray:
     return noise
 
 
-def _psf(ctx: _StageContext, sci, header):
+def _psf(ctx: _StageContext, sci, header, noise=None):
     from astropy.io import fits
     from astropy.wcs import WCS
 
@@ -534,9 +534,24 @@ def _psf(ctx: _StageContext, sci, header):
         target_xy=(float(target_xy[0]), float(target_xy[1])),
         peak_max=peak_max,
     )
-    psf, psf_full, psf_diag = epsf_mod.build_epsf(
-        sci, stars, spec.psf_shape, spec.psf_full_shape
-    )
+    if spec.psf_backend == "starred":
+        # Tier-1b: STARRED super-sampled ePSF from the same field stars
+        # (hst_acs_pipeline.md Stage 5 Tier 1b, #35). Optional GPL/JAX extra;
+        # raises loudly if unavailable — never silently falls back to Tier 1.
+        from .psf import starred_epsf as starred_mod
+
+        if noise is None:
+            raise ValueError(
+                "psf_backend='starred' needs the noise map (STARRED weights "
+                "stars by per-pixel noise); pipeline did not pass it"
+            )
+        psf, psf_full, psf_diag = starred_mod.build_starred_epsf(
+            sci, noise, stars, spec.psf_shape, spec.psf_full_shape
+        )
+    else:
+        psf, psf_full, psf_diag = epsf_mod.build_epsf(
+            sci, stars, spec.psf_shape, spec.psf_full_shape
+        )
     if adapter.observatory == "keck":
         # Tier B: in-field ePSF. Usable, but an AO PSF from field stars at a
         # different anisoplanatic angle is still provisional by contract.
@@ -722,7 +737,7 @@ def reduce_target(
     _ground_prepare(ctx)
     sci, header, wht, exptime = _combine(ctx)
     noise = _noise(ctx, sci, wht, exptime)
-    psf, psf_full = _psf(ctx, sci, header)
+    psf, psf_full = _psf(ctx, sci, header, noise)
     _package(ctx, sci, header, wht, noise, psf, psf_full)
     _package_frames(ctx)
     provenance_mod.write_reduction_json(out_dir, ctx.record)

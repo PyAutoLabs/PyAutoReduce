@@ -193,6 +193,15 @@ mosaic. Never pair a native-frame PSF with a drizzled image.
   the empirical star-stack (0.58) far better than the photutils Tier-1 ePSF
   (0.39, under-concentrated and neighbour-contaminated in the crowded field),
   and it is robust where photutils' extended-kernel build fails.
+  **Regime of applicability** (#39, JWST M92 NIRCam, `scripts/reduce_m92_jwst.py`):
+  STARRED is a *conditional* upgrade, not universal. It wins on well-sampled data
+  (WFC3/UVIS F606W; JWST LW F277W, where it matches the empirical PSF while the
+  photutils build collapses on few blended stars) and is the more robust
+  estimator across crowding. But on **undersampled NIRCam SW** (F150W at
+  0.03"/pix, PSF ~1.7 px) it **broadens** — excess starlet-channel wings,
+  under-concentrated — and the photutils ePSF wins there (consistent with the
+  #35 adversarial undersampling result). Prefer STARRED for well-sampled and
+  crowded/few-star fields; keep photutils (or Tier 2) for undersampled SW.
 - **Tier 2 — TinyTim + focus model** (fallback; SLACS elliptical snapshot
   fields are typically star-poor): model PSFs raytraced per exposure with
   TinyTim, focus ("breathing") estimated by matching whatever stars exist,

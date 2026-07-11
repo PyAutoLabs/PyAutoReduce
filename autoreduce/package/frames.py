@@ -135,14 +135,17 @@ def _sip_only_header(hdr):
 def _write_product(data: np.ndarray, header, out_path: Path, dtype) -> None:
     from astropy.io import fits
 
-    fits.PrimaryHDU(data.astype(dtype), header=header).writeto(
-        out_path, overwrite=True
-    )
+    fits.PrimaryHDU(data.astype(dtype), header=header).writeto(out_path, overwrite=True)
 
 
 def _package_one_chip(
-    hdul, extver: int, spec: TargetSpec, adapter: InstrumentAdapter,
-    shape: Tuple[int, int], chip_dir: Path, cr_masker,
+    hdul,
+    extver: int,
+    spec: TargetSpec,
+    adapter: InstrumentAdapter,
+    shape: Tuple[int, int],
+    chip_dir: Path,
+    cr_masker,
 ) -> Dict:
     """One SCI chip -> data/noise/dq/cr_mask FITS + its manifest entry."""
     from astropy.nddata import Cutout2D
@@ -195,9 +198,7 @@ def _package_one_chip(
     # BKGLEVEL) — subtract it so frames share the mosaic's zero level.
     sky, sky_keyword = _sky_level(primary, hdr)
     exptime = _exposure_time(primary)
-    factor, conversion, out_bunit = _units_to_cps(
-        str(hdr.get("BUNIT", "")), exptime
-    )
+    factor, conversion, out_bunit = _units_to_cps(str(hdr.get("BUNIT", "")), exptime)
     sci_cps = (sci_cut_native - sky) * factor
     err_cps = err_cut * factor
 
@@ -268,12 +269,25 @@ def _package_one_chip(
 
 
 def _frame_psf(hdul, extver, spec, adapter, chip_dir: Path) -> Dict:
-    """Tier-1 native ePSF for one chip; writes psf files when viable."""
-    from ..psf import frame_epsf as frame_epsf_mod
+    """Native ePSF for one chip; writes psf files when viable.
 
-    psf, psf_full, diag = frame_epsf_mod.build_frame_epsf(
-        hdul, extver, spec, adapter
-    )
+    Back-end follows ``spec.psf_backend``: "epsf" (default, photutils Tier-1) or
+    "starred" (Tier-1b super-sampled ePSF from the same frame stars; optional
+    GPL/JAX extra). Both share the frame preprocessing and return ``None`` when
+    the frame is too star-poor for a PSF.
+    """
+    if spec.psf_backend == "starred":
+        from ..psf import starred_epsf as starred_mod
+
+        psf, psf_full, diag = starred_mod.build_starred_frame_epsf(
+            hdul, extver, spec, adapter
+        )
+    else:
+        from ..psf import frame_epsf as frame_epsf_mod
+
+        psf, psf_full, diag = frame_epsf_mod.build_frame_epsf(
+            hdul, extver, spec, adapter
+        )
     if psf is not None:
         # Plain kernels, mirroring the mosaic PSF products (no WCS — the
         # kernel is defined on the frame's native pixel grid).
@@ -342,9 +356,7 @@ def _relative_registration(frames_dir: Path, entries: List[Dict]) -> None:
             data = hdul[0].data.astype(float)
             wcs = WCS(hdul[0].header)
         xk, yk = wcs.world_to_pixel_values(ra, dec)
-        resampled = map_coordinates(
-            data, [yk, xk], order=1, mode="constant", cval=0.0
-        )
+        resampled = map_coordinates(data, [yk, xk], order=1, mode="constant", cval=0.0)
         # whiten=True: on real (noisy) frames phase correlation is the
         # hole-robust estimator — the per-frame CR masks punch different
         # zeros into each cutout, which bias plain correlation and centroids
@@ -425,9 +437,7 @@ def package_frame_products(
                 )
             seen_rootnames[rootname] = Path(path).name
             extvers = [
-                int(hdu.header.get("EXTVER", 1))
-                for hdu in hdul
-                if hdu.name == "SCI"
+                int(hdu.header.get("EXTVER", 1)) for hdu in hdul if hdu.name == "SCI"
             ]
             for extver in extvers:
                 chip_dir = frames_dir / f"{rootname}_chip{extver}"

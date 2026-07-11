@@ -59,34 +59,31 @@ def _native_peak_max(bunit: str, exptime: float, adapter, selection):
     )
 
 
-def build_frame_epsf(
-    hdul,
-    extver: int,
-    spec: TargetSpec,
-    adapter: InstrumentAdapter,
-) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Dict]:
-    """
-    Tier-1 ePSF from one calibrated frame's full chip.
+def _prepare_frame(hdul, extver: int, spec: TargetSpec, adapter: InstrumentAdapter):
+    """Shared native-frame preprocessing for the per-frame PSF back-ends.
 
-    Returns ``(psf, psf_full, diagnostics)``; ``(None, None, diagnostics)``
-    when fewer than the minimum usable stars survive — the caller records
-    the outcome and ships the frame without PSF products.
+    Returns ``(work, err, found, n_patched)`` — the sky-subtracted, DQ-patched
+    working image, the matched per-pixel ERR array (``None`` if the frame has
+    none), the ``find_stars`` candidate table, and the patched-pixel count.
+    Both the photutils (:func:`build_frame_epsf`) and STARRED
+    (:func:`starred_epsf.build_starred_frame_epsf`) frame builders share this so
+    the star selection is identical across back-ends.
+
+    Sky-subtracted working image with bad pixels local-median patched —
+    estimator input only (see module docstring); the patch is smooth, so a
+    patched hot pixel or cosmic ray cannot pass the star sharpness cuts. "Bad"
+    follows the per-observatory DQ policy: HST bits all mark suspect data; JWST
+    informational bits (JUMP_DET etc.) ride good pixels — patching those would
+    smooth large fractions of a NIRCam chip, so only DO_NOT_USE is patched.
     """
     from astropy.wcs import WCS
+
+    from ..package.frames import _exposure_time, _sky_level
 
     sci_hdu = hdul["SCI", extver]
     dq = hdul["DQ", extver].data
     hdr = sci_hdu.header
     primary = hdul[0].header
-
-    # Sky-subtracted working image with bad pixels local-median patched —
-    # estimator input only (see module docstring); the patch is smooth, so
-    # a patched hot pixel or cosmic ray cannot pass the star sharpness
-    # cuts, let alone bias a stamp. "Bad" follows the per-observatory DQ
-    # policy: HST bits all mark suspect data; JWST informational bits
-    # (JUMP_DET etc.) ride good pixels — patching those would smooth large
-    # fractions of a NIRCam chip, so only DO_NOT_USE is patched.
-    from ..package.frames import _exposure_time, _sky_level
 
     sky, _ = _sky_level(primary, hdr)
     work = sci_hdu.data.astype(float) - sky
@@ -100,23 +97,50 @@ def build_frame_epsf(
 
         work = np.where(bad, median_filter(work, size=5), work)
 
+    # Per-pixel noise for noise-weighted back-ends (STARRED weights each star by
+    # its noise). Both HST _flc/_flt and JWST _cal frames carry an ERR extension.
+    try:
+        err = np.asarray(hdul["ERR", extver].data, dtype=float)
+    except KeyError:
+        err = None
+
     # Exclude stars near the target itself, exactly as the mosaic path does;
     # the full-distortion projection is the same one the cutout uses.
     wcs_full = WCS(hdr, fobj=hdul, naxis=2)
     x, y = wcs_full.world_to_pixel_values(spec.ra, spec.dec)
-
     selection = stars_mod.StarSelection()
     peak_max = _native_peak_max(
-        str(hdr.get("BUNIT", "")),
-        _exposure_time(primary),
-        adapter,
-        selection,
+        str(hdr.get("BUNIT", "")), _exposure_time(primary), adapter, selection
     )
     found = stars_mod.find_stars(
+        work, selection, target_xy=(float(x), float(y)), peak_max=peak_max
+    )
+    return (
         work,
-        selection,
-        target_xy=(float(x), float(y)),
-        peak_max=peak_max,
+        err,
+        found,
+        n_patched,
+        primary,
+        (float(x), float(y)),
+        sci_hdu.data.shape,
+    )
+
+
+def build_frame_epsf(
+    hdul,
+    extver: int,
+    spec: TargetSpec,
+    adapter: InstrumentAdapter,
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Dict]:
+    """
+    Tier-1 ePSF from one calibrated frame's full chip.
+
+    Returns ``(psf, psf_full, diagnostics)``; ``(None, None, diagnostics)``
+    when fewer than the minimum usable stars survive — the caller records
+    the outcome and ships the frame without PSF products.
+    """
+    work, _err, found, n_patched, primary, target_xy, det_shape = _prepare_frame(
+        hdul, extver, spec, adapter
     )
 
     cr_screen = "DQ-patched" if n_patched else "shape-cuts-only"
@@ -141,10 +165,10 @@ def build_frame_epsf(
             try:
                 psf, psf_full, diag2b = stpsf_model.model_frame_psf(
                     primary,
-                    (float(x), float(y)),
+                    target_xy,
                     spec,
                     adapter,
-                    det_shape=sci_hdu.data.shape,
+                    det_shape=det_shape,
                 )
             except ImportError as ierr:
                 return (
@@ -152,13 +176,17 @@ def build_frame_epsf(
                     None,
                     {"method": "none", "tier2b": f"unavailable: {ierr}", **tier1},
                 )
-            return psf, psf_full, {
-                **diag2b,
-                "tier1_reason": tier1["reason"],
-                "n_candidates": tier1["n_candidates"],
-                "n_patched_pixels": tier1["n_patched_pixels"],
-                "cr_screen": tier1["cr_screen"],
-            }
+            return (
+                psf,
+                psf_full,
+                {
+                    **diag2b,
+                    "tier1_reason": tier1["reason"],
+                    "n_candidates": tier1["n_candidates"],
+                    "n_patched_pixels": tier1["n_patched_pixels"],
+                    "cr_screen": tier1["cr_screen"],
+                },
+            )
         return None, None, {"method": "none", **tier1}
     diag = {
         "method": "epsf-frame-tier1",

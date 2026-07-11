@@ -186,7 +186,13 @@ mosaic. Never pair a native-frame PSF with a drizzled image.
   numpy/astropy). The open technical problem is drizzle-consistency: STARRED's
   super-sampled PSF must be brought onto the mosaic grid (rebin, or the
   `psf/frame_combine.py` drop-convolve + WCS-Jacobian route) to honour the
-  drizzled-PSF invariant. (PyAutoReduce#35.)
+  drizzled-PSF invariant. (PyAutoReduce#35; drizzle-consistency settled by the
+  #35 ground-truth test — route-a rebin + centroid-preserving delivery.)
+  **Validated on real stars** (#37, `scripts/reduce_omegacen_wfc3.py`): on an
+  Omega Cen WFC3/UVIS F606W field, STARRED's ePSF concentration (0.54) matches
+  the empirical star-stack (0.58) far better than the photutils Tier-1 ePSF
+  (0.39, under-concentrated and neighbour-contaminated in the crowded field),
+  and it is robust where photutils' extended-kernel build fails.
 - **Tier 2 — TinyTim + focus model** (fallback; SLACS elliptical snapshot
   fields are typically star-poor): model PSFs raytraced per exposure with
   TinyTim, focus ("breathing") estimated by matching whatever stars exist,

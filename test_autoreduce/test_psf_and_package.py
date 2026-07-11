@@ -13,6 +13,7 @@ from autoreduce.psf.stars import (
     reject_near,
 )
 from autoreduce.psf.fallback import ModelPSFUnavailableError, model_psf
+from autoreduce.psf.starred_epsf import StarredUnavailableError, build_starred_epsf
 
 
 class TestStarCuts:
@@ -63,6 +64,28 @@ class TestTierFailuresAreLoud:
     def test_tier2_unimplemented_is_hard_stop(self):
         with pytest.raises(ModelPSFUnavailableError, match="hard stop"):
             model_psf("lens", "F814W", (21, 21), (61, 61))
+
+
+class TestStarredTier1bSeam:
+    """The optional Tier-1b STARRED back-end (PyAutoReduce#35) is a defined
+    interface that fails loudly until the spike wires it — never a silent
+    fall-through to the photutils Tier-1 ePSF."""
+
+    def test_backend_is_a_loud_hard_stop_until_wired(self):
+        # Loud whether or not the optional GPL/JAX `starred` extra is installed:
+        # the install message (extra absent) or the not-wired message (extra
+        # present, spike pending) — both StarredUnavailableError, never silent.
+        with pytest.raises(StarredUnavailableError):
+            build_starred_epsf(np.zeros((100, 100)), None, (21, 21), (61, 61))
+
+    def test_missing_optional_extra_names_the_install(self):
+        try:
+            import starred  # noqa: F401
+        except ImportError:
+            with pytest.raises(StarredUnavailableError, match="not installed"):
+                build_starred_epsf(np.zeros((10, 10)), None, (21, 21), (61, 61))
+        else:
+            pytest.skip("starred installed; install-guard path not exercised")
 
 
 class TestCutout:

@@ -172,6 +172,21 @@ mosaic. Never pair a native-frame PSF with a drizzled image.
   construction via `photutils.EPSFBuilder` on star cutouts from the final
   mosaic. Star selection: unsaturated, uncrowded, DQ-clean point sources;
   the count and fit residuals go into `reduction.json`.
+- **Tier 1b — super-sampled ePSF via STARRED** (optional, higher-fidelity
+  alternative to Tier 1 for demanding quasar/AGN or weak-lensing-grade work):
+  [STARRED](https://arxiv.org/abs/2402.08725) (Michalewicz, Millon et al.,
+  COSMOGRAIL) reconstructs the PSF from the **same field stars Tier 1 selects**,
+  as an analytic Moffat core plus a starlet-ℓ1-regularized super-sampled
+  residual grid (Nyquist-sampled). It is standalone and science-target-agnostic
+  — stars in, PSF out — so it is a *reduction-stage* back-end, not a target
+  reconstruction. Two constraints keep it optional and isolated: STARRED is
+  **GPL-3.0-or-later** (PyAuto\* are permissive), so it ships only as the
+  optional extra `pyautoreduce[starred]`, imported lazily; and it depends on
+  JAX, so it runs in `prototypes/`/integration only (unit tests stay
+  numpy/astropy). The open technical problem is drizzle-consistency: STARRED's
+  super-sampled PSF must be brought onto the mosaic grid (rebin, or the
+  `psf/frame_combine.py` drop-convolve + WCS-Jacobian route) to honour the
+  drizzled-PSF invariant. (PyAutoReduce#35.)
 - **Tier 2 — TinyTim + focus model** (fallback; SLACS elliptical snapshot
   fields are typically star-poor): model PSFs raytraced per exposure with
   TinyTim, focus ("breathing") estimated by matching whatever stars exist,
@@ -182,13 +197,18 @@ mosaic. Never pair a native-frame PSF with a drizzled image.
   handles the drizzled-PSF invariant exactly. TinyTim's maintenance status is
   a risk; STScI's newer focus-diverse ePSF libraries for ACS are evaluated in
   the spike as a possible replacement.
-- **Tier 3 — high-fidelity reconstruction back-ends (optional extra):**
-  [STARRED](https://arxiv.org/abs/2402.08725) (wavelet-regularized
-  two-channel PSF reconstruction; current state of the art in the TDCOSMO
-  pipeline comparisons) and [PSFr](https://github.com/sibirrer/psfr)
-  (Birrer's iterative reconstruction developed for lensed quasars). Not
-  needed for SLACS-style galaxy-galaxy lenses; becomes the default tier for
-  lensed quasars/AGN where the point source itself constrains the PSF.
+- **Not a reduction tier — target-based PSF reconstruction (modelling-stage).**
+  Reconstructing the PSF from the *science point sources themselves* — the
+  lensed quasar/AGN images, e.g. [PSFr](https://github.com/sibirrer/psfr)
+  (Birrer's iterative reconstruction) or STARRED's two-channel deconvolution of
+  the target — is deliberately **out of reduction scope**: it entangles the PSF
+  with the lensed arc/host and belongs to the modelling stage (consistent with
+  `keck_ao.md` Tier C). PyAutoReduce ships the inputs (point-source cutouts + a
+  drizzle-consistent PSF) and stops. Note the earlier design here mislabelled
+  STARRED as this "point source constrains the PSF" tier; STARRED's
+  *PSF-reconstruction* mode in fact uses **field stars** and is Tier 1b above —
+  the two STARRED modes fall on opposite sides of this reduction/modelling
+  boundary.
 
 - **Alternative construction — `TargetSpec.psf_from_frames` (issue #21):**
   the delivered mosaic-grid PSF built by *combining the per-frame tier-1

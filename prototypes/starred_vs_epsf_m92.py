@@ -17,19 +17,20 @@ star-stack (the true PSF).
   ~/venv/PyAuto/bin/python               prototypes/starred_vs_epsf_m92.py compare
 """
 
+import os
 import sys
 from pathlib import Path
 
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-_FIELD = "m92_f150w"
+_FIELD = os.environ.get("M92_FIELD", "m92_f150w")  # m92_f150w (SW) | m92_f277w (LW)
 _CAND = [
     ROOT / "scripts/output" / _FIELD,
     Path.home() / "Code/PyAutoLabs/PyAutoReduce/scripts/output" / _FIELD,
 ]
 FIELD = next((p for p in _CAND if (p / "data.fits").exists()), _CAND[0])
-OUT = ROOT / "prototypes" / "output" / "starred_vs_epsf_m92"
+OUT = ROOT / "prototypes" / "output" / f"starred_vs_epsf_{_FIELD}"
 NPZ = OUT / "compare.npz"
 FIT = 21
 PEAK_MAX = (
@@ -53,7 +54,9 @@ def epsf():
         detection_sigma=12.0,
         sharp_range=(0.3, 1.0),
         round_limit=0.4,
-        min_separation_pix=13.0,
+        min_separation_pix=float(
+            os.environ.get("M92_MINSEP", "13")
+        ),  # SW 13px / LW 18px
         exclusion_radius_pix=0.0,
     )
     stars = find_stars(sci, sel, (nx / 2, ny / 2), peak_max=PEAK_MAX)
@@ -212,7 +215,7 @@ def compare():
     ax[3].set_title("radial profile", fontsize=9)
     ax[3].legend(fontsize=8)
     fig.suptitle(
-        f"{_FIELD} (STELLAR, undersampled SW): closer-to-empirical wins → {metrics['winner']}",
+        f"{_FIELD} (STELLAR): closer-to-empirical wins → {metrics['winner']}",
         fontsize=10,
     )
     fig.tight_layout()

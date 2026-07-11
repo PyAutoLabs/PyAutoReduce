@@ -27,19 +27,18 @@ from autoreduce.instruments import nircam_adapter_for_filter  # noqa: E402
 RA, DEC = 259.28079, 43.13594
 CACHE_ROOT = REPO / "scripts" / "cache"
 OUTPUT_ROOT = REPO / "scripts" / "output"
-BAND = "F150W"
 
 
-def spec() -> TargetSpec:
-    adapter = nircam_adapter_for_filter(BAND)
+def spec(band: str) -> TargetSpec:
+    adapter = nircam_adapter_for_filter(band)
     return TargetSpec(
-        name=f"m92_{BAND.lower()}",
+        name=f"m92_{band.lower()}",
         ra=RA,
         dec=DEC,
         instrument=adapter.key,
-        filter_name=BAND,
+        filter_name=band,
         proposal_ids=("1334",),  # JWST NIRCam calibration field
-        final_scale=adapter.recommended_final_scale,  # SW 0.03"
+        final_scale=adapter.recommended_final_scale,  # SW 0.03" / LW 0.06"
         final_pixfrac=1.0,
         cutout_shape=(
             501,
@@ -49,7 +48,15 @@ def spec() -> TargetSpec:
 
 
 def main():
-    s = spec()
+    import argparse
+
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument(
+        "--band",
+        default="F150W",
+        help="F150W (SW, undersampled) | F277W (LW, well-sampled)",
+    )
+    s = spec(p.parse_args().band)
     record = reduce_target(s, cache_root=CACHE_ROOT, output_root=OUTPUT_ROOT)
     summary = {
         "n_exposures": record["acquire"]["n_exposures"],

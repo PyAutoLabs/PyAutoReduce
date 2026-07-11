@@ -52,6 +52,12 @@ class TargetSpec:
     # frame_products (the frame ePSFs are built either way).
     psf_from_frames: bool = False
 
+    # PSF back-end for the mosaic path: "epsf" (default, photutils Tier-1) or
+    # "starred" (Tier-1b super-sampled ePSF from the same field stars; requires
+    # the optional `pyautoreduce[starred]` extra — GPL/JAX, isolated). Ignored
+    # when psf_from_frames or the Keck tier-A path own the PSF stage.
+    psf_backend: str = "epsf"
+
     # Alignment: residual (pixels) above which TweakReg refinement triggers.
     alignment_tolerance_pix: float = 0.1
 

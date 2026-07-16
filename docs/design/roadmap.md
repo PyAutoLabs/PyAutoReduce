@@ -72,6 +72,13 @@ cosmic-ray masks, the WCS manifest with measured relative registration
 - **Per-adapter `dq_bad_bits`** — refinement of the any-nonzero-bit masking
   policy, if a consumer ever needs to keep e.g. warm-pixel bits.
 
+## Simulated data through the pipeline (injection)
+
+- Feasibility verdict + phasing in [`simulate.md`](simulate.md) (issue #44):
+  in scope as synthetic-source injection into real calibrated frames
+  (Balrog-style) plus `simobserve` for ALMA; raw-instrument simulation out
+  of scope. Phase 1 = the `inject` stage on the HST/ACS path.
+
 ## Other instruments / surveys
 
 - Ground-based (e.g. archival CFHT/Subaru for environment studies) and other

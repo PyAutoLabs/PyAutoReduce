@@ -61,6 +61,21 @@ class TargetSpec:
     # Alignment: residual (pixels) above which TweakReg refinement triggers.
     alignment_tolerance_pix: float = 0.1
 
+    # Synthetic-source injection (docs/design/simulate.md, phase 1 —
+    # HST astrodrizzle path only). Path to a plain FITS image whose pixel
+    # values are e-/s per input pixel; None = no injection.
+    inject_image: Optional[str] = None
+    # arcsec/pix of the input image; required with inject_image.
+    inject_pixel_scale: Optional[float] = None
+    # (ra, dec) degrees the input image is centred on; None = the target.
+    inject_position: Optional[Tuple[float, float]] = None
+    # PSF FITS (native scale, odd shape) convolved with the rendered input
+    # on every frame; None = each frame's tier-1 ePSF (loud when the star
+    # field cannot support one).
+    inject_psf: Optional[str] = None
+    # Seed for the injected source's per-frame Poisson realisations.
+    inject_seed: int = 0
+
     # Visibility-domain (ALMA) additions — ignored by imaging instruments,
     # required by the visibility branch (docs/design/alma.md). The imaging
     # dials above (cutout, drizzle, psf shapes) are ignored in return.
@@ -113,6 +128,24 @@ class TargetSpec:
                 raise ValueError(
                     f"{shape_name} must be odd so the PSF has a centre pixel: {shape}"
                 )
+        if self.inject_image is not None:
+            if self.inject_pixel_scale is None or self.inject_pixel_scale <= 0.0:
+                raise ValueError(
+                    "inject_image requires a positive inject_pixel_scale "
+                    f"(arcsec/pix of the input image): {self.inject_pixel_scale}"
+                )
+            if self.inject_position is not None and len(self.inject_position) != 2:
+                raise ValueError(
+                    f"inject_position must be (ra, dec) degrees: {self.inject_position}"
+                )
+        elif any(
+            getattr(self, k) is not None
+            for k in ("inject_pixel_scale", "inject_position", "inject_psf")
+        ):
+            raise ValueError(
+                "inject_pixel_scale/inject_position/inject_psf are set but "
+                "inject_image is None — injection dials require an input image"
+            )
 
     @classmethod
     def from_yaml(cls, path) -> "TargetSpec":
@@ -121,6 +154,8 @@ class TargetSpec:
         for key in ("cutout_shape", "psf_shape", "psf_full_shape"):
             if key in raw:
                 raw[key] = tuple(raw[key])
+        if raw.get("inject_position") is not None:
+            raw["inject_position"] = tuple(float(v) for v in raw["inject_position"])
         for key in (
             "proposal_ids",
             "koa_science_ids",

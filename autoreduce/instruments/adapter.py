@@ -46,6 +46,16 @@ class InstrumentAdapter:
     # name a detector; None for space-based instruments, whose level-2
     # products carry calibrated units already.
     detector: object = None
+    # Synthetic-source injection (docs/design/simulate.md): the units the
+    # inject_image pixel values carry for this instrument — "electrons/s"
+    # (HST; detector-referred flux) or "Jy" (JWST; the MJy/sr conversion
+    # goes through the frame's own PIXAR_SR, flux-exact and gain-free).
+    inject_units: str = "electrons/s"
+    # Nominal detector gain (e-/DN) — needed only to size the injected
+    # source's Poisson draw on surface-brightness frames (MJy/sr); the
+    # injected MEAN never depends on it. None where unused (HST e-/s
+    # frames are already electron-referred).
+    e_per_dn: Optional[float] = None
 
     def ground_detector(self):
         """The detector constants, loud when a ground stage needs them."""

@@ -66,12 +66,12 @@ def _spec(tmp_path, input_data=None, **extra):
 
     fits.PrimaryHDU(_delta_psf()).writeto(psf_path, overwrite=True)
     extra.setdefault("inject_psf", str(psf_path))
+    extra.setdefault("inject_pixel_scale", 0.025)
     return TargetSpec(
         name="t",
         ra=RA,
         dec=DEC,
         inject_image=str(image_path),
-        inject_pixel_scale=0.025,
         **extra,
     )
 
@@ -128,22 +128,69 @@ class TestInputContract:
         assert wcs.wcs.crval[1] == pytest.approx(DEC)
 
 
-class TestUnitsFactor:
+class TestChipUnits:
+    def _hst(self):
+        return instruments.get("acs_wfc")
+
+    def _jwst_header(self, photmjsr=0.5, pixar_sr=2.0e-14):
+        from astropy.io import fits
+
+        return fits.Header({"PHOTMJSR": photmjsr, "PIXAR_SR": pixar_sr})
+
     def test_electrons_add_as_counts(self):
-        assert inject_mod._injection_units_factor("ELECTRONS", 500.0) == 1.0
+        from astropy.io import fits
+
+        e_per_in, sci_per_e, _ = inject_mod._chip_units(
+            "ELECTRONS", fits.Header(), 500.0, self._hst()
+        )
+        assert e_per_in == 500.0 and sci_per_e == 1.0
 
     def test_cps_divides_by_exptime(self):
-        assert inject_mod._injection_units_factor(
-            "ELECTRONS/S", 500.0
-        ) == pytest.approx(1.0 / 500.0)
+        from astropy.io import fits
+
+        e_per_in, sci_per_e, _ = inject_mod._chip_units(
+            "ELECTRONS/S", fits.Header(), 500.0, self._hst()
+        )
+        assert e_per_in == 500.0
+        assert sci_per_e == pytest.approx(1.0 / 500.0)
+
+    def test_mjysr_mean_is_gain_free_and_flux_exact(self):
+        pixar_sr = 2.0e-14
+        adapter = instruments.get("nircam_sw")
+        e_per_jy, sci_per_e, note = inject_mod._chip_units(
+            "MJY/SR", self._jwst_header(pixar_sr=pixar_sr), 1000.0, adapter
+        )
+        # electrons_per_input x sci_per_electron == SB per Jy: 1/(PIXAR_SR x 1e6),
+        # independent of the nominal gain and exposure time.
+        assert e_per_jy * sci_per_e == pytest.approx(1.0 / (pixar_sr * 1e6))
+        assert "gain-free" in note or "e_per_dn" in note
+
+    def test_mjysr_missing_photometry_is_loud(self):
+        from astropy.io import fits
+
+        with pytest.raises(ValueError, match="PHOTMJSR and PIXAR_SR"):
+            inject_mod._chip_units(
+                "MJY/SR", fits.Header(), 1000.0, instruments.get("nircam_sw")
+            )
+
+    def test_mjysr_without_gain_is_loud(self):
+        from dataclasses import replace
+
+        gainless = replace(instruments.get("nircam_sw"), e_per_dn=None)
+        with pytest.raises(ValueError, match="e_per_dn"):
+            inject_mod._chip_units("MJY/SR", self._jwst_header(), 1000.0, gainless)
 
     def test_unknown_bunit_is_loud(self):
+        from astropy.io import fits
+
         with pytest.raises(ValueError, match="unrecognised SCI BUNIT"):
-            inject_mod._injection_units_factor("MJY/SR", 500.0)
+            inject_mod._chip_units("COUNTS", fits.Header(), 500.0, self._hst())
 
     def test_cps_without_exptime_is_loud(self):
+        from astropy.io import fits
+
         with pytest.raises(ValueError, match="EXPTIME"):
-            inject_mod._injection_units_factor("ELECTRONS/S", 0.0)
+            inject_mod._chip_units("ELECTRONS/S", fits.Header(), 0.0, self._hst())
 
 
 class TestConvolve:
@@ -265,17 +312,97 @@ class TestInjectIntoExposures:
         assert added == pytest.approx(1000.0, rel=0.01)
 
 
+def _cal_hdul(exptime=1000.0, shape=(200, 200), photmjsr=0.5, pixar_sr=2.0e-14):
+    """Synthetic JWST _cal-like MEF: MJy/sr SCI with photometry keywords."""
+    from astropy.io import fits
+    from astropy.wcs import WCS
+
+    primary = fits.PrimaryHDU()
+    primary.header["XPOSURE"] = exptime
+    primary.header["TELESCOP"] = "JWST"
+    wcs = WCS(naxis=2)
+    wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    wcs.wcs.crval = [RA, DEC]
+    wcs.wcs.crpix = [100.5, 100.5]
+    wcs.wcs.cdelt = [-0.031 / 3600.0, 0.031 / 3600.0]
+    hdr = wcs.to_header()
+    hdr["BUNIT"] = "MJy/sr"
+    hdr["PHOTMJSR"] = photmjsr
+    hdr["PIXAR_SR"] = pixar_sr
+    sci = np.full(shape, 0.02)
+    err = np.full(shape, 0.005)
+    dq = np.zeros(shape, dtype=np.int32)
+    return fits.HDUList(
+        [
+            primary,
+            fits.ImageHDU(data=sci, header=hdr, name="SCI", ver=1),
+            fits.ImageHDU(data=err, header=hdr.copy(), name="ERR", ver=1),
+            fits.ImageHDU(data=dq, header=hdr.copy(), name="DQ", ver=1),
+        ]
+    )
+
+
+class TestInjectJwst:
+    def _run(self, tmp_path, flux_jy=1.0e-6, pixar_sr=2.0e-14):
+        pytest.importorskip("drizzle")
+        exposure = tmp_path / "jw01727_cal.fits"
+        if not exposure.exists():
+            _cal_hdul(pixar_sr=pixar_sr).writeto(exposure)
+        spec = _spec(
+            tmp_path,
+            input_data=_gaussian_input(flux=flux_jy),
+            instrument="nircam_sw",
+            inject_pixel_scale=0.015,
+        )
+        adapter = instruments.get(spec.instrument)
+        work_dir = tmp_path / "work"
+        work_dir.mkdir(exist_ok=True)
+        return (
+            inject_mod.inject_into_exposures([exposure], spec, adapter, work_dir),
+            flux_jy,
+            pixar_sr,
+        )
+
+    def test_mean_surface_brightness_added_is_flux_exact(self, tmp_path):
+        from astropy.io import fits
+
+        (paths, fragment), flux_jy, pixar_sr = self._run(tmp_path)
+        injected = fits.getdata(paths[0], ("SCI", 1))
+        # Sum(SB added) x pixel area = injected flux, gain-free:
+        # sum_sb = flux_Jy / (PIXAR_SR x 1e6).
+        added_sb = injected.sum() - 0.02 * 200 * 200
+        assert added_sb == pytest.approx(
+            flux_jy / (pixar_sr * 1e6), rel=0.02
+        )
+        assert fragment["input_units"] == "Jy"
+        assert "e_per_dn" in (fragment["units_note"] or "")
+
+    def test_err_grows_in_sb_units(self, tmp_path):
+        from astropy.io import fits
+
+        (paths, _), _, _ = self._run(tmp_path)
+        err = fits.getdata(paths[0], ("ERR", 1))
+        assert np.all(err >= 0.005 - 1e-12)
+        assert err.max() > 0.005
+
+
 class TestPipelineGate:
-    def test_non_hst_instrument_is_loud(self, tmp_path):
+    def test_keck_instrument_is_loud(self, tmp_path):
         from autoreduce.pipeline import reduce_target
 
         spec = _spec(tmp_path, instrument="nirc2_narrow")
-        with pytest.raises(ValueError, match="HST astrodrizzle path only"):
+        with pytest.raises(ValueError, match="phases 1-2a"):
             reduce_target(spec, tmp_path / "cache", tmp_path / "out")
 
-    def test_jwst_backend_is_loud(self, tmp_path):
-        from autoreduce.pipeline import reduce_target
+    def test_jwst_backend_admitted_past_gate(self, tmp_path, monkeypatch):
+        # The gate must not reject nircam; acquisition is stubbed to fail
+        # loudly AFTER the gate so no network is touched.
+        from autoreduce import pipeline as pipeline_mod
 
+        def boom(ctx):
+            raise RuntimeError("gate passed; acquire reached")
+
+        monkeypatch.setattr(pipeline_mod, "_acquire", boom)
         spec = _spec(tmp_path, instrument="nircam_lw")
-        with pytest.raises(ValueError, match="HST astrodrizzle path only"):
-            reduce_target(spec, tmp_path / "cache", tmp_path / "out")
+        with pytest.raises(RuntimeError, match="gate passed"):
+            pipeline_mod.reduce_target(spec, tmp_path / "cache", tmp_path / "out")

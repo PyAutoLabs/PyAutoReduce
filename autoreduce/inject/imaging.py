@@ -1,5 +1,6 @@
 """
-Imaging injection (docs/design/simulate.md, phase 1 — HST astrodrizzle path).
+Imaging injection (docs/design/simulate.md — HST astrodrizzle + JWST
+jwst_image3 paths).
 
 Balrog-style synthetic-source injection (Suchyta et al. 2016; DES Y6,
 Anbajagane et al. 2025): the input image is rendered onto each real
@@ -10,12 +11,15 @@ mutated. Everything downstream (align, drizzle + driz_cr, noise, psf,
 package) then runs unchanged on frames whose cosmic rays, sky and
 correlated noise are real.
 
-Input contract: a plain FITS image whose pixel values are e-/s per input
-pixel (total source flux = array sum), at `inject_pixel_scale` arcsec/pix,
-placed north-up at `inject_position` (default: the target). Values must be
-non-negative — the injected source's Poisson realisation is drawn from
-them. The input must not be PSF-convolved already; the stage convolves
-with each frame's PSF itself.
+Input contract: a plain FITS image whose pixel values are flux per input
+pixel in the adapter's ``inject_units`` — e-/s for HST's electron-referred
+frames, Jy for JWST's MJy/sr frames (total source flux = array sum) — at
+`inject_pixel_scale` arcsec/pix, placed north-up at `inject_position`
+(default: the target). Values must be non-negative — the injected
+source's Poisson realisation is drawn from them. The input must not be
+PSF-convolved already; the stage convolves with each frame's PSF itself.
+Phase 1 covered the HST astrodrizzle path; phase 2a (this) adds JWST
+jwst_image3.
 """
 
 import shutil
@@ -63,7 +67,7 @@ def load_input_image(spec: TargetSpec) -> Tuple[np.ndarray, object]:
     if np.any(data < 0.0):
         raise ValueError(
             f"inject_image contains negative pixels: {spec.inject_image} — "
-            "values are e-/s per pixel and seed a Poisson draw, so they "
+            "values are flux per pixel and seed a Poisson draw, so they "
             "must be non-negative"
         )
     ra, dec = spec.inject_position or (spec.ra, spec.dec)
@@ -133,25 +137,71 @@ def convolve_with_psf(image: np.ndarray, kernel: np.ndarray) -> np.ndarray:
     return out[oy : oy + ny, ox : ox + nx]
 
 
-def _injection_units_factor(bunit: str, exptime: float) -> float:
+def _chip_units(
+    bunit: str, sci_header, exptime: float, adapter: InstrumentAdapter
+) -> Tuple[float, float, str]:
     """
-    Electrons -> the chip's SCI units (the inverse of the frame-products
-    reading contract, `package.frames._units_to_cps`): ELECTRONS add as
-    counts, ELECTRONS/S divide by EXPTIME. Anything else is loud — the
-    phase-1 gate admits HST astrodrizzle inputs only.
+    ``(electrons_per_input, sci_per_electron, note)`` for one chip — the
+    two directions of the chip's photometry (the reading contract's
+    counterpart, `package.frames._units_to_cps`):
+
+    - ``model_e = rendered_input x electrons_per_input`` sizes the
+      injected source's Poisson draw;
+    - ``SCI += counts x sci_per_electron`` (and
+      ``ERR^2 += model_e x sci_per_electron^2``) converts realised
+      electrons back to the chip's SCI units.
+
+    HST ELECTRONS[/S] frames take the adapter's e-/s input directly.
+    JWST MJy/sr frames take Jy-per-pixel input through the frame's own
+    PIXAR_SR — electrons_per_input x sci_per_electron reduces to
+    1/(PIXAR_SR x 1e6), so the injected MEAN is flux-exact and the
+    nominal detector gain (adapter e_per_dn) shapes only the Poisson
+    width.
     """
     unit = bunit.strip().upper()
     if unit in ("ELECTRONS", "ELECTRON"):
-        return 1.0
+        if not np.isfinite(exptime) or exptime <= 0.0:
+            raise ValueError(
+                f"cannot inject into ELECTRONS without a positive EXPTIME: {exptime}"
+            )
+        return exptime, 1.0, "e-/s x EXPTIME"
     if unit in ("ELECTRONS/S", "ELECTRON/S", "ELECTRONS/SEC"):
         if not np.isfinite(exptime) or exptime <= 0.0:
             raise ValueError(
                 f"cannot inject into ELECTRONS/S without a positive EXPTIME: {exptime}"
             )
-        return 1.0 / exptime
+        return exptime, 1.0 / exptime, "e-/s x EXPTIME; SCI back in cps"
+    if unit == "MJY/SR":
+        photmjsr = sci_header.get("PHOTMJSR")
+        pixar_sr = sci_header.get("PIXAR_SR")
+        gain = adapter.e_per_dn
+        if not photmjsr or not pixar_sr:
+            raise ValueError(
+                "MJy/sr injection needs PHOTMJSR and PIXAR_SR in the SCI "
+                f"header (got {photmjsr!r}, {pixar_sr!r})"
+            )
+        if not gain:
+            raise ValueError(
+                f"MJy/sr injection needs adapter e_per_dn to size the "
+                f"Poisson draw (instrument {adapter.key!r})"
+            )
+        if not np.isfinite(exptime) or exptime <= 0.0:
+            raise ValueError(
+                f"cannot inject into MJy/sr without a positive exposure time: {exptime}"
+            )
+        electrons_per_jy = gain * exptime / (
+            float(pixar_sr) * 1.0e6 * float(photmjsr)
+        )
+        sci_per_electron = float(photmjsr) / (gain * exptime)
+        return (
+            electrons_per_jy,
+            sci_per_electron,
+            f"Jy -> MJy/sr via PIXAR_SR; Poisson width via nominal "
+            f"e_per_dn={gain} (approximate; mean is gain-free)",
+        )
     raise ValueError(
         f"unrecognised SCI BUNIT {bunit!r} for injection — expected "
-        "ELECTRONS[/S] (HST calibrated products)"
+        "ELECTRONS[/S] (HST) or MJY/SR (JWST) calibrated products"
     )
 
 
@@ -209,7 +259,9 @@ def inject_into_exposures(
         rng = np.random.default_rng((spec.inject_seed, seed_offset))
         chip_records: List[Dict] = []
         with fits.open(out_path, mode="update") as hdul:
-            exptime = float(hdul[0].header.get("EXPTIME", 0.0))
+            from ..package.frames import _exposure_time
+
+            exptime = _exposure_time(hdul[0].header)
             extvers = [
                 hdu.ver for hdu in hdul if hdu.name == "SCI"
             ]
@@ -225,15 +277,18 @@ def inject_into_exposures(
                 if overlap <= MIN_OVERLAP_FRACTION * max(input_flux, 1.0):
                     continue
                 kernel, psf_note = _frame_kernel(hdul, extver, spec, adapter)
-                model_cps = convolve_with_psf(model_cps, kernel)
+                model_input = convolve_with_psf(model_cps, kernel)
+                electrons_per_input, sci_per_electron, units_note = _chip_units(
+                    str(sci_hdu.header.get("BUNIT", "")),
+                    sci_hdu.header,
+                    exptime,
+                    adapter,
+                )
                 # Convolution ringing can leave tiny negatives; they are
                 # not source flux and cannot seed a Poisson draw.
-                model_e = np.clip(model_cps, 0.0, None) * exptime
+                model_e = np.clip(model_input, 0.0, None) * electrons_per_input
                 counts = rng.poisson(model_e).astype(np.float64)
-                factor = _injection_units_factor(
-                    str(sci_hdu.header.get("BUNIT", "")), exptime
-                )
-                sci_hdu.data = sci_hdu.data + counts * factor
+                sci_hdu.data = sci_hdu.data + counts * sci_per_electron
                 try:
                     err_hdu = hdul["ERR", extver]
                 except KeyError:
@@ -242,7 +297,8 @@ def inject_into_exposures(
                         f"{path.name} — injection must propagate its variance"
                     )
                 err_hdu.data = np.sqrt(
-                    err_hdu.data.astype(np.float64) ** 2 + model_e * factor**2
+                    err_hdu.data.astype(np.float64) ** 2
+                    + model_e * sci_per_electron**2
                 )
                 chip_records.append(
                     {"extver": int(extver), "injected_e": float(counts.sum())}
@@ -264,6 +320,10 @@ def inject_into_exposures(
 
     fragment = {
         "input_image": Path(spec.inject_image).name,
+        "input_units": adapter.inject_units,
+        "units_note": units_note if frame_records and any(
+            f["chips"] for f in frame_records
+        ) else None,
         "input_pixel_scale": spec.inject_pixel_scale,
         "input_flux_cps": input_flux,
         "position": list(spec.inject_position or (spec.ra, spec.dec)),

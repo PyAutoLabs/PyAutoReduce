@@ -30,6 +30,10 @@ _COMMON = dict(
         "weight_type": "ivm",
     },
     saturation_dn=100_000.0,
+    # Injection (simulate.md phase 2a): input in Jy/pixel; nominal NIRCam
+    # gain sizes the Poisson draw only (disclosed in provenance).
+    inject_units="Jy",
+    e_per_dn=2.0,
 )
 
 NIRCAM_SW = register(

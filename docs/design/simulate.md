@@ -125,9 +125,20 @@ externally and hand PyAutoReduce the result.
    Real-data validation: injection-recovery on the slacs0008 field
    (`prototypes/inject_recovery_slacs.py` — clean vs injected difference
    image, 3" aperture, parity-style report).
-2. **JWST + Keck injection** — extend through the adapter seam (`_cal` units
-   MJy/sr; prepared Keck frames in electrons). Expected to be mostly
-   adapter plumbing if phase 1 lands the stage at the right boundary.
+2. **JWST + Keck injection** — split on sizing:
+   - **2a JWST — in progress (issue #52)**: `_cal` frames, MJy/sr. The
+     input contract is per-adapter (`InstrumentAdapter.inject_units`):
+     HST e-/s per pixel; **JWST Jy per pixel**, converted through the
+     frame's own `PIXAR_SR` so the injected mean is flux-exact and
+     gain-free; the nominal `e_per_dn` sizes only the Poisson width
+     (disclosed in provenance). Injected variance enters frame ERR
+     before image3 resamples (the JWST noise stage reads propagated
+     ERR). Recovery spike: `prototypes/inject_recovery_jwst.py`
+     (COSMOS-Web ring, F150W).
+   - **2b Keck — prompted** (`draft/feature/pyautoreduce/inject_stage_keck.md`):
+     blocked on a registration design decision — raw-header WCS is
+     arcsecond-grade, so placement must ride the combine's measured
+     offsets (`offsets_to_reference` pre-pass), not `all_world2pix`.
 3. **ALMA** — `simobserve` acquire-alternative + optional uv-plane injection.
 4. *(deferred, likely never)* raw-frame simulation — revisit only if a
    validated community simulator for HST imaging appears.

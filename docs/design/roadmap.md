@@ -81,8 +81,13 @@ cosmic-ray masks, the WCS manifest with measured relative registration
 
 ## Other instruments / surveys
 
-- Ground-based (e.g. archival CFHT/Subaru for environment studies) and other
-  space missions as need arises — adapters again.
+- **Survey colour context — in progress (issue #50)**: the `cutout`
+  domain, design in [`surveys.md`](surveys.md) — Legacy Surveys (the DES
+  door, with invvar noise), SDSS, Pan-STARRS; fetch + package, never
+  reduce; noise/PSF optional by design. HSC (auth-gated) and
+  unWISE/GALEX layers recorded there as follow-ups.
+- Ground-based *reduction* (e.g. archival CFHT/Subaru for environment
+  studies) and other space missions as need arises — adapters again.
 - **Euclid VIS is explicitly out of scope**: Euclid reduction and
   lens-modeling glue live in `euclid_strong_lens_modeling_pipeline`.
 

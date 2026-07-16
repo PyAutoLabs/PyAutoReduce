@@ -96,6 +96,11 @@ class TargetSpec:
     # ALMA project code for archive acquisition, e.g. "2016.1.00282.S".
     alma_project_code: Optional[str] = None
 
+    # Survey-cutout additions (docs/design/surveys.md) — ignored by the
+    # imaging and visibility branches. Bands to fetch; None = the
+    # adapter's defaults.
+    survey_bands: Optional[Tuple[str, ...]] = None
+
     # Ground-based (KOA) additions — ignored by space-based instruments.
     # Explicit KOA identifiers pin the science frame set exactly (the raw
     # archive has no association tables); None = query by coords + program.
@@ -162,6 +167,7 @@ class TargetSpec:
             "koa_psf_star_ids",
             "alma_uids",
             "alma_spws",
+            "survey_bands",
         ):
             if raw.get(key) is not None:
                 raw[key] = tuple(str(p) for p in raw[key])

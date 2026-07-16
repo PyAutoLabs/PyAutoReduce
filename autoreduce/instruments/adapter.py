@@ -103,9 +103,32 @@ class VisibilityInstrumentAdapter:
     archive: str  # which archive the acquire stage queries, e.g. "alma"
 
 
-# The shared registry stores both families; consumers dispatch on `.domain`
+@dataclass(frozen=True)
+class SurveyCutoutAdapter:
+    """
+    Static description of one survey cutout-service path (docs/design/
+    surveys.md). Third domain alongside imaging and visibility: these
+    surveys deliver *pre-reduced* coadds through public services, so the
+    branch fetches and packages — it never reduces. Products are colour
+    context, not modeling inputs; noise and PSF are optional by design.
+    """
+
+    domain = "cutout"
+
+    key: str  # registry key, e.g. "legacy_surveys"
+    observatory: str  # e.g. "legacy" — also the service dispatch key
+    bands: Tuple[str, ...]  # default bands fetched (TargetSpec.survey_bands overrides)
+    native_scale: float  # arcsec / pix of the service's cutouts
+    # Whether the service ships a per-pixel variance product the branch
+    # can turn into an RMS map (Legacy: an invvar HDU on the same request).
+    noise_available: bool = False
+
+
+# The shared registry stores all families; consumers dispatch on `.domain`
 # before touching family-specific fields.
-AnyAdapter = Union[InstrumentAdapter, VisibilityInstrumentAdapter]
+AnyAdapter = Union[
+    InstrumentAdapter, VisibilityInstrumentAdapter, SurveyCutoutAdapter
+]
 
 _REGISTRY: Dict[str, AnyAdapter] = {}
 

@@ -386,6 +386,28 @@ class TestInjectJwst:
         assert err.max() > 0.005
 
 
+class TestNoOverlap:
+    def test_footprint_missing_all_chips_is_a_clean_noop(self, tmp_path):
+        pytest.importorskip("drizzle")
+        from astropy.io import fits
+
+        exposure = tmp_path / "j8pu42vlq_flc.fits"
+        _frame_hdul().writeto(exposure)
+        spec = _spec(tmp_path, inject_position=(RA + 1.0, DEC))
+        adapter = instruments.get(spec.instrument)
+        work_dir = tmp_path / "work"
+        work_dir.mkdir(exist_ok=True)
+        paths, fragment = inject_mod.inject_into_exposures(
+            [exposure], spec, adapter, work_dir
+        )
+        # Frames pass through untouched but stamped; fragment stays coherent.
+        sci = fits.getdata(paths[0], ("SCI", 1))
+        assert sci.sum() == pytest.approx(140.0 * 200 * 200)
+        assert fragment["total_injected_e"] == 0.0
+        assert fragment["units_note"] is None
+        assert fragment["frames"][0]["chips"] == []
+
+
 class TestPipelineGate:
     def test_keck_instrument_is_loud(self, tmp_path):
         from autoreduce.pipeline import reduce_target

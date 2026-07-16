@@ -251,6 +251,7 @@ def inject_into_exposures(
     new_paths: List[Path] = []
     frame_records: List[Dict] = []
     psf_note: Optional[str] = None
+    units_note: Optional[str] = None
     for path in exposures:
         path = Path(path)
         out_path = injected_dir / path.name
@@ -321,9 +322,7 @@ def inject_into_exposures(
     fragment = {
         "input_image": Path(spec.inject_image).name,
         "input_units": adapter.inject_units,
-        "units_note": units_note if frame_records and any(
-            f["chips"] for f in frame_records
-        ) else None,
+        "units_note": units_note,
         "input_pixel_scale": spec.inject_pixel_scale,
         "input_flux_cps": input_flux,
         "position": list(spec.inject_position or (spec.ra, spec.dec)),

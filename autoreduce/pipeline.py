@@ -705,6 +705,16 @@ def reduce_target(
     work_dir = out_dir / "work"
     work_dir.mkdir(exist_ok=True)
 
+    if adapter.domain == "cutout":
+        # The survey-cutout branch (docs/design/surveys.md): fetch +
+        # package colour context from pre-reduced coadd services. No
+        # cache lifecycle — cutouts are small and fetched per run.
+        from .surveys import pipeline as survey_pipeline
+
+        record = survey_pipeline.reduce_survey_target(spec, adapter, out_dir)
+        provenance_mod.write_reduction_json(out_dir, record)
+        return record
+
     if adapter.domain == "visibility":
         # The visibility branch (docs/design/alma.md): its own stages, the
         # shared cache/provenance machinery, the same eviction contract.

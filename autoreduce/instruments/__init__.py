@@ -7,6 +7,7 @@ the first adapter; WFC3 and JWST follow (see ``docs/design/roadmap.md``).
 
 from .adapter import (
     InstrumentAdapter,
+    SurveyCutoutAdapter,
     VisibilityInstrumentAdapter,
     get,
     register,
@@ -18,3 +19,4 @@ from .wfc3_ir import WFC3_IR
 from .nircam import NIRCAM_SW, NIRCAM_LW, nircam_adapter_for_filter
 from .nirc2 import NIRC2_NARROW, NIRC2_WIDE, NIRC2_DETECTOR
 from .alma import ALMA
+from .surveys import LEGACY_SURVEYS, SDSS, PANSTARRS

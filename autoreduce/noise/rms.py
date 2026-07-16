@@ -11,6 +11,8 @@ applying R: the legacy SLACS noise maps are consistent with it
 (parity appendix, docs/design/hst_acs_pipeline.md).
 """
 
+from typing import Dict, Tuple
+
 import numpy as np
 
 
@@ -165,3 +167,38 @@ def empirical_background_rms(sci: np.ndarray, n_sigma: float = 3.0) -> float:
 
     _, _, std = sigma_clipped_stats(sci[np.isfinite(sci)], sigma=n_sigma)
     return float(std)
+
+
+def noise_map_from_error(
+    err: np.ndarray,
+    sci: np.ndarray,
+    correlated_noise_factor: float = 1.0,
+) -> Tuple[np.ndarray, Dict]:
+    """
+    RMS map from a propagated ERR array (the JWST path: *read, don't
+    construct* — the resampled ``_i2d`` already carries Poisson + read
+    noise + flat, so stage 4 reads it and applies the same correlated-
+    noise factor R the HST path uses). NaN/zero stay NaN (loud later).
+
+    The consistency block compares against the empirical blank-sky RMS;
+    large disagreement means the upstream error model and the sky
+    disagree and must be investigated, not absorbed.
+    """
+    if err.shape != sci.shape:
+        raise ValueError(f"shape mismatch: err {err.shape} vs sci {sci.shape}")
+    if correlated_noise_factor < 1.0:
+        raise ValueError(
+            f"correlated-noise factor must be >= 1: {correlated_noise_factor}"
+        )
+    noise = np.where(
+        np.isfinite(err) & (err > 0.0), correlated_noise_factor * err, np.nan
+    )
+
+    sky_rms = empirical_background_rms(sci[np.isfinite(noise)])
+    err_floor = float(np.nanpercentile(noise, 5)) / correlated_noise_factor
+    consistency = {
+        "empirical_sky_rms": sky_rms,
+        "err_5th_percentile_pre_R": err_floor,
+        "sky_over_err_floor": sky_rms / err_floor if err_floor > 0 else float("inf"),
+    }
+    return noise, consistency

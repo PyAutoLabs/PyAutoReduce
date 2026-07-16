@@ -5,7 +5,7 @@ instrument-specific lives behind an `InstrumentAdapter`; no module outside
 """
 
 from dataclasses import dataclass
-from typing import Dict, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,31 @@ class InstrumentAdapter:
     def scale_ratio(self, final_scale: float) -> float:
         """s = output scale / native scale, as used by the Casertano factor."""
         return final_scale / self.native_scale
+
+    def max_single_exposure_seconds(self, headers) -> Optional[float]:
+        """
+        The longest single-exposure time in the stack, or None when no
+        per-exposure full-well cut applies. Saturation is per exposure,
+        not per stack: a star saturates when its rate fills the well
+        within one exposure, so peak caps divide the full well by this —
+        never the mosaic total.
+
+        HST reads EXPTIME; Keck frames integrate ITIME x COADDS. JWST
+        mosaics are in surface-brightness units (MJy/sr) where a
+        full-well cut is meaningless; saturated cores arrive as NaN/DQ-
+        blank from the level-2 pipeline (refinement tracked in
+        docs/design/jwst.md open items).
+        """
+        if self.observatory == "hst":
+            t = max(float(h.get("EXPTIME", 0.0)) for h in headers)
+            if t <= 0.0:
+                raise ValueError("no exposure carries a positive EXPTIME header")
+            return t
+        if self.observatory == "keck":
+            return max(
+                float(h["ITIME"]) * int(h["COADDS"]) for h in headers
+            )
+        return None
 
 
 @dataclass(frozen=True)

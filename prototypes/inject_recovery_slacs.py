@@ -58,7 +58,10 @@ def main() -> int:
     parser.add_argument("--flux-cps", type=float, default=30.0)
     args = parser.parse_args()
 
-    out_root = Path("prototypes/output/inject_recovery")
+    # Absolute paths throughout: the drizzle combine chdir's into the work
+    # dir, where relative cache/exposure paths no longer resolve.
+    args.cache = str(Path(args.cache).resolve())
+    out_root = Path("prototypes/output/inject_recovery").resolve()
     out_root.mkdir(parents=True, exist_ok=True)
     input_path = build_input(out_root, args.flux_cps)
     inject_ra = RA + args.offset_arcsec / 3600.0

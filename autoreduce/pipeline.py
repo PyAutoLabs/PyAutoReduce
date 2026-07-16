@@ -436,10 +436,8 @@ def _noise(ctx: _StageContext, sci, wht, exptime: float) -> np.ndarray:
     if ctx.adapter.combine_backend == "jwst_image3":
         from astropy.io import fits
 
-        from .noise import jwst_rms as jwst_rms_mod
-
         err = fits.getdata(drizzle_prov["err_path"]).astype(float)
-        noise, consistency = jwst_rms_mod.noise_map_from_error(
+        noise, consistency = rms_mod.noise_map_from_error(
             err,
             sci,
             correlated_noise_factor=drizzle_prov["correlated_noise_factor"],
@@ -510,41 +508,14 @@ def _psf(ctx: _StageContext, sci, header, noise=None):
         return psf, psf_full
     target_xy = WCS(header).world_to_pixel_values(spec.ra, spec.dec)
     selection = stars_mod.StarSelection()
-    if adapter.observatory == "hst":
-        # Saturation is per exposure, not per stack: a star saturates when its
-        # rate fills the well within one exposure, so the cps cap divides the
-        # full well by the longest single-exposure time — never the mosaic
-        # total.
-        max_single_exptime = max(
-            float(fits.getheader(p).get("EXPTIME", 0.0)) for p in ctx.exposures
-        )
-        if max_single_exptime <= 0.0:
-            raise ValueError("no exposure carries a positive EXPTIME header")
-        peak_max = (
-            selection.saturation_fraction
-            * adapter.saturation_dn
-            / max_single_exptime
-        )
-    elif adapter.observatory == "keck":
-        # Tier B in-field ePSF on an e-/s mosaic: the same per-exposure
-        # full-well cap as HST applies, from the prepared frames' own
-        # ITIME x COADDS (the longest single frame bounds the star rate
-        # that stays linear).
-        max_single_exptime = max(
-            float(fits.getheader(p)["ITIME"]) * int(fits.getheader(p)["COADDS"])
-            for p in ctx.exposures
-        )
-        peak_max = (
-            selection.saturation_fraction
-            * adapter.saturation_dn
-            / max_single_exptime
-        )
-    else:
-        # JWST mosaics are in surface-brightness units (MJy/sr) where a
-        # full-well cut is meaningless; saturated cores arrive as NaN/DQ-blank
-        # from the level-2 pipeline, so no peak cut is applied. Refinement
-        # (unit-converted cap) tracked in docs/design/jwst.md open items.
-        peak_max = None
+    max_single_exptime = adapter.max_single_exposure_seconds(
+        [fits.getheader(p) for p in ctx.exposures]
+    )
+    peak_max = (
+        selection.saturation_fraction * adapter.saturation_dn / max_single_exptime
+        if max_single_exptime
+        else None
+    )
     stars = stars_mod.find_stars(
         sci,
         selection,

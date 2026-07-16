@@ -41,6 +41,7 @@ from typing import Dict, Optional, Tuple
 
 import numpy as np
 
+from . import moments
 from .epsf import InsufficientStarsError
 
 __all__ = [
@@ -137,19 +138,6 @@ def _downsample_box(img, factor):
     return v.mean(axis=(1, 3))
 
 
-def _size_fwhm(p):
-    """Second-moment FWHM proxy (px): 2.355 * sigma. Continuous, unlike a
-    half-max-radius FWHM which quantises to the pixel grid."""
-    pc = np.clip(p, 0, None)
-    ny, nx = pc.shape
-    yy, xx = np.mgrid[0:ny, 0:nx]
-    t = pc.sum()
-    cy, cx = (yy * pc).sum() / t, (xx * pc).sum() / t
-    ixx = ((xx - cx) ** 2 * pc).sum() / t
-    iyy = ((yy - cy) ** 2 * pc).sum() / t
-    return float(2.3548 * np.sqrt(0.5 * (ixx + iyy)))
-
-
 def _deliver(psf_supersampled, subsampling, shape):
     """Route-a drizzle-consistent delivery: block-downsample to the mosaic grid,
     then crop around the measured centroid and sub-pixel-recentre onto the odd
@@ -230,7 +218,7 @@ def build_starred_epsf(
     psf_full = _deliver(full_ss, subsampling, psf_full_shape)
     psf = _deliver(full_ss, subsampling, psf_shape)
 
-    fwhm = _size_fwhm(psf)
+    fwhm = moments.moment_fwhm(psf)
     undersampled = fwhm < UNDERSAMPLED_FWHM_PX
     if undersampled:
         warnings.warn(
@@ -326,7 +314,7 @@ def build_starred_frame_epsf(
     psf_full = _deliver(full_ss, subsampling, spec.psf_full_shape)
     psf = _deliver(full_ss, subsampling, spec.psf_shape)
 
-    fwhm = _size_fwhm(psf)
+    fwhm = moments.moment_fwhm(psf)
     dcy, dcx = _core_centroid(psf)
     return (
         psf,

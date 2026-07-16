@@ -3,7 +3,7 @@ import pytest
 
 from autoreduce import instruments
 from autoreduce.instruments.nircam import nircam_adapter_for_filter
-from autoreduce.noise.jwst_rms import noise_map_from_error
+from autoreduce.noise.rms import noise_map_from_error
 
 
 class TestNIRCamAdapters:

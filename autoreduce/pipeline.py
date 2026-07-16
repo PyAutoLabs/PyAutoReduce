@@ -242,6 +242,23 @@ def _acquire(ctx: _StageContext) -> None:
     }
 
 
+def _inject(ctx: _StageContext) -> None:
+    """
+    Opt-in synthetic-source injection (docs/design/simulate.md phase 1):
+    everything downstream of acquire sees work-dir frame copies carrying
+    the injected source; the exposure cache is never mutated.
+    """
+    if not ctx.spec.inject_image:
+        return
+    from .inject import imaging as inject_mod
+
+    injected, fragment = inject_mod.inject_into_exposures(
+        ctx.exposures, ctx.spec, ctx.adapter, ctx.work_dir
+    )
+    ctx.exposures = injected
+    ctx.record["inject"] = fragment
+
+
 def _align(ctx: _StageContext) -> None:
     if ctx.adapter.observatory == "keck":
         # Raw NIRC2 header WCS is approximate; relative registration is
@@ -702,6 +719,15 @@ def reduce_target(
             "psf_from_frames supports HST and JWST only "
             f"(instrument {spec.instrument!r})"
         )
+    if spec.inject_image and (
+        observatory != "hst" or adapter.combine_backend != "astrodrizzle"
+    ):
+        # Phase 1 of docs/design/simulate.md; JWST/Keck injection and the
+        # ALMA simobserve path are later phases.
+        raise ValueError(
+            "inject_image supports the HST astrodrizzle path only "
+            f"(instrument {spec.instrument!r}; docs/design/simulate.md phase 1)"
+        )
     cache = cache_mod.ExposureCache(Path(cache_root), size_cap_bytes=size_cap_bytes)
     out_dir = Path(output_root) / spec.name
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -733,6 +759,7 @@ def reduce_target(
     )
 
     _acquire(ctx)
+    _inject(ctx)
     _align(ctx)
     _ground_prepare(ctx)
     sci, header, wht, exptime = _combine(ctx)

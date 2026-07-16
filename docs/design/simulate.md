@@ -117,10 +117,14 @@ externally and hand PyAutoReduce the result.
 
 ## Phasing (each phase = its own PyAutoMind prompt when its predecessor ships)
 
-1. **HST/ACS imaging injection** — the `inject` stage for the `astrodrizzle`
-   path, validated by injection-recovery on a SLACS host field (flux in vs
-   packaged cps out, within the parity tolerances). Prompt filed:
-   `draft/feature/pyautoreduce/inject_stage_hst_imaging.md`.
+1. **HST/ACS imaging injection** — **in progress (issue #46)**: the opt-in
+   `inject` stage between `acquire` and the combine path. Dials:
+   `TargetSpec.inject_image` (plain FITS, e-/s per pixel, not
+   PSF-convolved), `inject_pixel_scale`, `inject_position` (default: the
+   target), `inject_psf` (default: per-frame tier-1 ePSF), `inject_seed`.
+   Real-data validation: injection-recovery on the slacs0008 field
+   (`prototypes/inject_recovery_slacs.py` — clean vs injected difference
+   image, 3" aperture, parity-style report).
 2. **JWST + Keck injection** — extend through the adapter seam (`_cal` units
    MJy/sr; prepared Keck frames in electrons). Expected to be mostly
    adapter plumbing if phase 1 lands the stage at the right boundary.

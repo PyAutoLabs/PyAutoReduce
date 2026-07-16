@@ -48,7 +48,7 @@ local_scheme = "no-local-version"
 [project.optional-dependencies]
 # The STScI HST stack is heavy and pins its own dependency tree; it is only
 # needed to run reductions, not to import autoreduce or work with its outputs.
-hst = ["drizzlepac>=3.5"]
+hst = ["drizzlepac>=3.5", "drizzle>=2.0"]  # standalone resampler: inject stage
 # Keck/NIRC2 ground-based path: KOA archive access plus the standalone
 # drizzle resampler (also shipped inside drizzlepac/jwst).
 keck = ["pykoa>=1.7", "drizzle>=2.0"]

@@ -100,26 +100,39 @@ def reduce_visibility_target(
     work_dir: Path,
 ) -> Dict:
     """Run the visibility branch for one target; returns the provenance record."""
-    _require(spec)
     record: Dict = {"target": spec.as_dict(), "instrument": adapter.key}
 
-    ms_paths, acquire_prov = _acquire(spec, cache)
+    if spec.inject_image:
+        # The simobserve acquire-alternative (simulate.md phase 3): a
+        # fully-synthetic MS replaces archive acquisition; the sim MS has
+        # one field (id 0) and one spw, so the uid/field/spw dials are
+        # not required and sim defaults drive the same downstream loop.
+        from . import simulate as simulate_mod
+
+        ms_path, acquire_prov = simulate_mod.simulate_ms(spec, work_dir)
+        ms_paths = [ms_path]
+        uids, field, spws = ("sim",), "0", ("0",)
+        record["inject"] = acquire_prov
+    else:
+        _require(spec)
+        ms_paths, acquire_prov = _acquire(spec, cache)
+        uids, field, spws = spec.alma_uids, spec.alma_field, spec.alma_spws
     record["acquire"] = {
         "measurement_sets": [p.name for p in ms_paths],
         **acquire_prov,
     }
 
     sets, labels, split_record, sidecars = [], [], [], {}
-    for uid, ms in zip(spec.alma_uids, ms_paths):
-        field_ms = split_mod.split_field(ms, uid, spec.alma_field, work_dir)
+    for uid, ms in zip(uids, ms_paths):
+        field_ms = split_mod.split_field(ms, uid, field, work_dir)
         # NUM_CHAN is only needed to resolve the collapse-the-spw default.
         num_chan = (
             extract_mod.num_channels_per_spw(ms) if spec.alma_width == 0 else None
         )
-        for spw in spec.alma_spws:
+        for spw in spws:
             width = split_mod.resolve_width(spec.alma_width, spw, num_chan)
             spw_ms = split_mod.split_spw(
-                field_ms, uid, spec.alma_field, spw, width, work_dir
+                field_ms, uid, field, spw, width, work_dir
             )
             columns = extract_mod.columns_from(spw_ms)
             sets.append(assemble_mod.assemble_ms_products(columns))
@@ -136,7 +149,7 @@ def reduce_visibility_target(
             sidecars[f"scans_{tag}"] = columns.scan
             sidecars[f"times_{tag}"] = columns.time
             sidecars[f"frequencies_{tag}"] = columns.chan_freq
-    record["split"] = {"blocks": split_record, "field": spec.alma_field}
+    record["split"] = {"blocks": split_record, "field": field}
 
     combined = assemble_mod.concatenate(sets, labels)
     record["assemble"] = combined.provenance

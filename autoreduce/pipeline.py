@@ -707,19 +707,21 @@ def reduce_target(
             "psf_from_frames supports HST and JWST only "
             f"(instrument {spec.instrument!r})"
         )
-    if spec.inject_image and (observatory, getattr(
-        adapter, "combine_backend", None
-    )) not in (
+    if spec.inject_image and adapter.domain != "visibility" and (
+        observatory, getattr(adapter, "combine_backend", None)
+    ) not in (
         ("hst", "astrodrizzle"),
         ("jwst", "jwst_image3"),
         ("keck", "nirc2_native"),
     ):
-        # Phases 1-2b of docs/design/simulate.md; the ALMA simobserve
-        # path (phase 3) is prompted, not yet built.
+        # Phases 1-3 of docs/design/simulate.md: imaging injection on the
+        # three built paths, or the simobserve acquire-alternative on the
+        # visibility branch. Survey cutouts are context, never injected.
         raise ValueError(
             "inject_image supports the HST astrodrizzle, JWST jwst_image3 "
-            f"and Keck nirc2_native paths only (instrument "
-            f"{spec.instrument!r}; docs/design/simulate.md phases 1-2b)"
+            f"and Keck nirc2_native imaging paths, or visibility-domain "
+            f"simulation via simobserve (instrument {spec.instrument!r}; "
+            "docs/design/simulate.md)"
         )
     cache = cache_mod.ExposureCache(Path(cache_root), size_cap_bytes=size_cap_bytes)
     out_dir = Path(output_root) / spec.name

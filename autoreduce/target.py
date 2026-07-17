@@ -101,6 +101,16 @@ class TargetSpec:
     # adapter's defaults.
     survey_bands: Optional[Tuple[str, ...]] = None
 
+    # simobserve acquire-alternative (docs/design/simulate.md phase 3) —
+    # active when inject_image is set on a visibility-domain instrument.
+    # Array configuration file name (casatools data repo).
+    alma_sim_antennalist: str = "alma.cycle8.3.cfg"
+    alma_sim_totaltime_s: float = 1800.0
+    alma_sim_integration_s: float = 10.0
+    alma_sim_freq_ghz: float = 230.0
+    # Precipitable water vapour for tsys-atm thermal noise; 0 = noiseless.
+    alma_sim_pwv_mm: float = 0.5
+
     # Ground-based (KOA) additions — ignored by space-based instruments.
     # Explicit KOA identifiers pin the science frame set exactly (the raw
     # archive has no association tables); None = query by coords + program.
@@ -133,6 +143,13 @@ class TargetSpec:
                 raise ValueError(
                     f"{shape_name} must be odd so the PSF has a centre pixel: {shape}"
                 )
+        for name in (
+            "alma_sim_totaltime_s", "alma_sim_integration_s", "alma_sim_freq_ghz"
+        ):
+            if getattr(self, name) <= 0.0:
+                raise ValueError(f"{name} must be positive: {getattr(self, name)}")
+        if self.alma_sim_pwv_mm < 0.0:
+            raise ValueError(f"alma_sim_pwv_mm must be >= 0: {self.alma_sim_pwv_mm}")
         if self.inject_image is not None:
             if self.inject_pixel_scale is None or self.inject_pixel_scale <= 0.0:
                 raise ValueError(

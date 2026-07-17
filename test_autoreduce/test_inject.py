@@ -509,11 +509,13 @@ class TestInjectKeck:
 
 
 class TestPipelineGate:
-    def test_alma_is_loud(self, tmp_path):
+    def test_cutout_domain_is_loud(self, tmp_path):
+        # ALMA injection became the simobserve path in phase 3 (covered in
+        # test_visibilities_simulate); survey cutouts stay rejected.
         from autoreduce.pipeline import reduce_target
 
-        spec = _spec(tmp_path, instrument="alma")
-        with pytest.raises(ValueError, match="phases 1-2b"):
+        spec = _spec(tmp_path, instrument="panstarrs")
+        with pytest.raises(ValueError, match="inject_image supports"):
             reduce_target(spec, tmp_path / "cache", tmp_path / "out")
 
     def test_jwst_and_keck_admitted_past_gate(self, tmp_path, monkeypatch):

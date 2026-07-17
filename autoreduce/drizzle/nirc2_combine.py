@@ -74,6 +74,34 @@ def build_pixmap(
     return pixmap
 
 
+def mosaic_geometry(
+    frame_shape: Tuple[int, int],
+    offsets,
+    scale_ratio: float,
+    distortion: np.ndarray,
+) -> Tuple[Tuple[float, float], Tuple[int, int]]:
+    """
+    ``(origin, out_shape)`` of the combine's output grid — the union
+    footprint of the rectified, aligned frame corners, padded by the
+    distortion solution's own maximum shift (edge pixels can move by more
+    than a fixed margin) plus a fixed safety margin. Deterministic given
+    the measured offsets, so the injection pre-pass (inject/keck.py)
+    reproduces the exact grid the combine will build.
+    """
+    ny, nx = frame_shape
+    dist_margin_y = float(np.ceil(np.abs(distortion[0]).max()))
+    dist_margin_x = float(np.ceil(np.abs(distortion[1]).max()))
+    corners_y, corners_x = [], []
+    for dy, dx in offsets:
+        corners_y += [0.0 - dy - dist_margin_y, (ny - 1.0) - dy + dist_margin_y]
+        corners_x += [0.0 - dx - dist_margin_x, (nx - 1.0) - dx + dist_margin_x]
+    origin = (min(corners_y), min(corners_x))
+    out_ny = int(np.ceil((max(corners_y) - origin[0]) * scale_ratio)) + 2 * _GRID_MARGIN
+    out_nx = int(np.ceil((max(corners_x) - origin[1]) * scale_ratio)) + 2 * _GRID_MARGIN
+    origin = (origin[0] - _GRID_MARGIN / scale_ratio, origin[1] - _GRID_MARGIN / scale_ratio)
+    return origin, (out_ny, out_nx)
+
+
 def _frame_background_variance_e(header, detector) -> float:
     """Background variance (e-^2/pixel) from the frame's recorded facts."""
     coadds = int(header["COADDS"])
@@ -134,21 +162,10 @@ def combine(
     )
     offsets = offsets_to_reference(frames)
     scale_ratio = adapter.native_scale / spec.final_scale
-
-    # Output grid: union footprint of the rectified, aligned frame corners,
-    # padded by the distortion solution's own maximum shift (edge pixels can
-    # move by more than a fixed margin) plus a fixed safety margin.
     ny, nx = frames[0].shape
-    dist_margin_y = float(np.ceil(np.abs(distortion[0]).max()))
-    dist_margin_x = float(np.ceil(np.abs(distortion[1]).max()))
-    corners_y, corners_x = [], []
-    for dy, dx in offsets:
-        corners_y += [0.0 - dy - dist_margin_y, (ny - 1.0) - dy + dist_margin_y]
-        corners_x += [0.0 - dx - dist_margin_x, (nx - 1.0) - dx + dist_margin_x]
-    origin = (min(corners_y), min(corners_x))
-    out_ny = int(np.ceil((max(corners_y) - origin[0]) * scale_ratio)) + 2 * _GRID_MARGIN
-    out_nx = int(np.ceil((max(corners_x) - origin[1]) * scale_ratio)) + 2 * _GRID_MARGIN
-    origin = (origin[0] - _GRID_MARGIN / scale_ratio, origin[1] - _GRID_MARGIN / scale_ratio)
+    origin, (out_ny, out_nx) = mosaic_geometry(
+        (ny, nx), offsets, scale_ratio, distortion
+    )
 
     driz = Drizzle(kernel=spec.final_kernel, out_shape=(out_ny, out_nx), fillval=0.0)
     total_exptime = 0.0

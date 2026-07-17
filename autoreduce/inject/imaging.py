@@ -89,8 +89,6 @@ def render_to_chip(
     frame's own solution — so the full lookup-table distortion costs one
     array-shaped ``all_world2pix``, never a per-frame-pixel loop.
     """
-    from drizzle.resample import Drizzle
-
     ny, nx = input_cps.shape
     yy, xx = np.mgrid[0.0:ny, 0.0:nx]
     world = in_wcs.all_pix2world(
@@ -103,22 +101,41 @@ def render_to_chip(
     pixmap[..., 0] = chip_xy[:, 0].reshape(ny, nx)
     pixmap[..., 1] = chip_xy[:, 1].reshape(ny, nx)
 
-    driz = Drizzle(kernel="square", out_shape=tuple(chip_shape), fillval=0.0)
+    # Nominal (reference-pixel) areas — the few-percent per-pixel
+    # distortion variation across a chip is the same PAM effect
+    # uncorrected FLC photometry carries.
+    from astropy.wcs.utils import proj_plane_pixel_area
+
+    area_ratio = proj_plane_pixel_area(chip_wcs) / proj_plane_pixel_area(in_wcs)
+    return render_via_pixmap(
+        input_cps, pixmap, tuple(chip_shape), area_ratio, pixfrac=pixfrac
+    )
+
+
+def render_via_pixmap(
+    input_image: np.ndarray,
+    pixmap: np.ndarray,
+    out_shape: Tuple[int, int],
+    area_ratio: float,
+    pixfrac: float = 1.0,
+) -> np.ndarray:
+    """
+    The shared drizzle-render core: deposit ``input_image`` onto
+    ``out_shape`` through an arbitrary ``(ny, nx, 2)`` pixmap. The drizzle
+    kernel preserves surface brightness, so the output sums to
+    input_flux x (input pixel area / output pixel area); ``area_ratio``
+    (output/input pixel area) restores flux-per-pixel semantics.
+    """
+    from drizzle.resample import Drizzle
+
+    driz = Drizzle(kernel="square", out_shape=tuple(out_shape), fillval=0.0)
     driz.add_image(
-        input_cps,
+        input_image,
         exptime=1.0,
         pixmap=pixmap,
         pixfrac=pixfrac,
         in_units="cps",
     )
-    # The drizzle kernel preserves surface brightness, so the output sums
-    # to input_flux x (input pixel area / chip pixel area); the area ratio
-    # restores flux-per-pixel semantics. Nominal (reference-pixel) areas —
-    # the few-percent per-pixel distortion variation across a chip is the
-    # same PAM effect uncorrected FLC photometry carries.
-    from astropy.wcs.utils import proj_plane_pixel_area
-
-    area_ratio = proj_plane_pixel_area(chip_wcs) / proj_plane_pixel_area(in_wcs)
     return driz.out_img.astype(np.float64) * area_ratio
 
 

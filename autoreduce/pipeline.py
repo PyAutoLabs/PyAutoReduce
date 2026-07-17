@@ -244,17 +244,34 @@ def _acquire(ctx: _StageContext) -> None:
 
 def _inject(ctx: _StageContext) -> None:
     """
-    Opt-in synthetic-source injection (docs/design/simulate.md phase 1):
-    everything downstream of acquire sees work-dir frame copies carrying
-    the injected source; the exposure cache is never mutated.
+    Opt-in synthetic-source injection (docs/design/simulate.md): runs
+    after _ground_prepare so the keck path injects into its *prepared*
+    frames; a no-op stage for HST/JWST, whose calibrated exposures are
+    unchanged by it. Everything downstream sees work-dir frame copies
+    carrying the injected source; the exposure cache is never mutated.
     """
     if not ctx.spec.inject_image:
         return
-    from .inject import imaging as inject_mod
+    if ctx.adapter.observatory == "keck":
+        from .drizzle.nirc2_combine import load_distortion
+        from .inject import keck as inject_keck_mod
 
-    injected, fragment = inject_mod.inject_into_exposures(
-        ctx.exposures, ctx.spec, ctx.adapter, ctx.work_dir
-    )
+        from astropy.io import fits
+
+        header = fits.getheader(ctx.exposures[0])
+        distortion = load_distortion(
+            Path(header["DISTX"]), Path(header["DISTY"]),
+            fits.getdata(ctx.exposures[0]).shape,
+        )
+        injected, fragment = inject_keck_mod.inject_into_prepared(
+            ctx.exposures, ctx.spec, ctx.adapter, ctx.work_dir, distortion
+        )
+    else:
+        from .inject import imaging as inject_mod
+
+        injected, fragment = inject_mod.inject_into_exposures(
+            ctx.exposures, ctx.spec, ctx.adapter, ctx.work_dir
+        )
     ctx.exposures = injected
     ctx.record["inject"] = fragment
 
@@ -692,13 +709,17 @@ def reduce_target(
         )
     if spec.inject_image and (observatory, getattr(
         adapter, "combine_backend", None
-    )) not in (("hst", "astrodrizzle"), ("jwst", "jwst_image3")):
-        # Phases 1 + 2a of docs/design/simulate.md; Keck (2b) and the
-        # ALMA simobserve path (3) are prompted, not yet built.
+    )) not in (
+        ("hst", "astrodrizzle"),
+        ("jwst", "jwst_image3"),
+        ("keck", "nirc2_native"),
+    ):
+        # Phases 1-2b of docs/design/simulate.md; the ALMA simobserve
+        # path (phase 3) is prompted, not yet built.
         raise ValueError(
-            "inject_image supports the HST astrodrizzle and JWST "
-            f"jwst_image3 paths only (instrument {spec.instrument!r}; "
-            "docs/design/simulate.md phases 1-2a)"
+            "inject_image supports the HST astrodrizzle, JWST jwst_image3 "
+            f"and Keck nirc2_native paths only (instrument "
+            f"{spec.instrument!r}; docs/design/simulate.md phases 1-2b)"
         )
     cache = cache_mod.ExposureCache(Path(cache_root), size_cap_bytes=size_cap_bytes)
     out_dir = Path(output_root) / spec.name
@@ -741,9 +762,9 @@ def reduce_target(
     )
 
     _acquire(ctx)
-    _inject(ctx)
     _align(ctx)
     _ground_prepare(ctx)
+    _inject(ctx)
     sci, header, wht, exptime = _combine(ctx)
     noise = _noise(ctx, sci, wht, exptime)
     psf, psf_full = _psf(ctx, sci, header, noise)

@@ -135,10 +135,21 @@ externally and hand PyAutoReduce the result.
      before image3 resamples (the JWST noise stage reads propagated
      ERR). Recovery spike: `prototypes/inject_recovery_jwst.py`
      (COSMOS-Web ring, F150W).
-   - **2b Keck — prompted** (`draft/feature/pyautoreduce/inject_stage_keck.md`):
-     blocked on a registration design decision — raw-header WCS is
-     arcsecond-grade, so placement must ride the combine's measured
-     offsets (`offsets_to_reference` pre-pass), not `all_world2pix`.
+   - **2b Keck — in progress (issue #54)**: injection into the *prepared*
+     frames, placed by the measured-offsets arithmetic (an
+     `offsets_to_reference` pre-pass reproduces the combine's
+     deterministic mosaic geometry; target at the mosaic-centre
+     convention; per-frame centres via the frame-products pixmap
+     inversion) — never the arcsecond-grade raw header WCS.
+     `inject_position` is honoured as an offset from the target, not
+     absolute. `inject_psf` is required (the AO PSF is epoch-specific;
+     an automatic tier-A source needs candidates before the combine —
+     recorded follow-up). No ERR bookkeeping: keck noise is constructed
+     from the mosaic downstream, so injected Poisson counts flow into
+     the noise map by themselves. Consistently-placed injection leaves
+     re-measured registration unchanged in expectation; the recovery
+     spike (`prototypes/inject_recovery_keck.py`, B1938+666) checks the
+     offsets with and without injection.
 3. **ALMA** — `simobserve` acquire-alternative + optional uv-plane injection.
 4. *(deferred, likely never)* raw-frame simulation — revisit only if a
    validated community simulator for HST imaging appears.

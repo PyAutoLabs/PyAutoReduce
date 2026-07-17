@@ -690,14 +690,15 @@ def reduce_target(
             "psf_from_frames supports HST and JWST only "
             f"(instrument {spec.instrument!r})"
         )
-    if spec.inject_image and (
-        observatory != "hst" or adapter.combine_backend != "astrodrizzle"
-    ):
-        # Phase 1 of docs/design/simulate.md; JWST/Keck injection and the
-        # ALMA simobserve path are later phases.
+    if spec.inject_image and (observatory, getattr(
+        adapter, "combine_backend", None
+    )) not in (("hst", "astrodrizzle"), ("jwst", "jwst_image3")):
+        # Phases 1 + 2a of docs/design/simulate.md; Keck (2b) and the
+        # ALMA simobserve path (3) are prompted, not yet built.
         raise ValueError(
-            "inject_image supports the HST astrodrizzle path only "
-            f"(instrument {spec.instrument!r}; docs/design/simulate.md phase 1)"
+            "inject_image supports the HST astrodrizzle and JWST "
+            f"jwst_image3 paths only (instrument {spec.instrument!r}; "
+            "docs/design/simulate.md phases 1-2a)"
         )
     cache = cache_mod.ExposureCache(Path(cache_root), size_cap_bytes=size_cap_bytes)
     out_dir = Path(output_root) / spec.name

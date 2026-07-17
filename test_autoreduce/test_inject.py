@@ -408,23 +408,126 @@ class TestNoOverlap:
         assert fragment["frames"][0]["chips"] == []
 
 
+def _prepared_keck_frame(data, itime=0.181, coadds=60):
+    from astropy.io import fits
+
+    header = fits.Header()
+    header["ITIME"] = itime
+    header["COADDS"] = coadds
+    header["BUNIT"] = "ELECTRONS"
+    return fits.PrimaryHDU(data.astype(np.float32), header=header)
+
+
+class TestInjectKeck:
+    def _frames(self, tmp_path, shift=(5, -3)):
+        rng = np.random.default_rng(0)
+        base = rng.normal(0.0, 1.0, (200, 200))
+        yy, xx = np.mgrid[0:200, 0:200]
+        base += 500.0 * np.exp(-0.5 * ((yy - 80) ** 2 + (xx - 120) ** 2) / 4.0)
+        rolled = np.roll(base, shift, axis=(0, 1))
+        paths = []
+        for i, data in enumerate((base, rolled)):
+            path = tmp_path / f"n{i:04d}_prep.fits"
+            if not path.exists():
+                _prepared_keck_frame(data).writeto(path)
+            paths.append(path)
+        return paths
+
+    def _inject(self, tmp_path, spec=None, **spec_extra):
+        pytest.importorskip("drizzle")
+        from autoreduce.inject import keck as keck_mod
+
+        paths = self._frames(tmp_path)
+        spec = spec or _spec(
+            tmp_path, instrument="nirc2_narrow",
+            inject_pixel_scale=0.005, **spec_extra,
+        )
+        adapter = instruments.get("nirc2_narrow")
+        work_dir = tmp_path / "work"
+        work_dir.mkdir(exist_ok=True)
+        distortion = np.zeros((2, 200, 200))
+        return (
+            keck_mod.inject_into_prepared(paths, spec, adapter, work_dir, distortion),
+            paths,
+        )
+
+    def test_electrons_added_scale_with_itime_coadds(self, tmp_path):
+        from astropy.io import fits
+
+        (new_paths, fragment), originals = self._inject(tmp_path)
+        added = fits.getdata(new_paths[0]).astype(float) - fits.getdata(
+            originals[0]
+        ).astype(float)
+        # flux 1000 e-/s x (0.181 x 60) s per frame.
+        assert added.sum() == pytest.approx(1000.0 * 0.181 * 60, rel=0.02)
+        assert fragment["total_injected_e"] == pytest.approx(
+            sum(f["injected_e"] for f in fragment["frames"])
+        )
+        assert "offsets_to_reference" in fragment["placement"]
+
+    def test_placement_follows_measured_offsets(self, tmp_path):
+        from astropy.io import fits
+
+        (new_paths, fragment), originals = self._inject(tmp_path)
+        centres = [f["centre_yx"] for f in fragment["frames"]]
+        # The injected centres differ by the frame offsets the pre-pass
+        # measured — which for rolled frames is the roll itself.
+        dy = centres[1][0] - centres[0][0]
+        dx = centres[1][1] - centres[0][1]
+        assert dy == pytest.approx(5.0, abs=0.2)
+        assert dx == pytest.approx(-3.0, abs=0.2)
+        # And the added light lands where the fragment says it does.
+        added = fits.getdata(new_paths[0]).astype(float) - fits.getdata(
+            originals[0]
+        ).astype(float)
+        yy, xx = np.mgrid[0:200, 0:200]
+        cy = (added * yy).sum() / added.sum()
+        cx = (added * xx).sum() / added.sum()
+        assert cy == pytest.approx(centres[0][0], abs=0.5)
+        assert cx == pytest.approx(centres[0][1], abs=0.5)
+
+    def test_nan_bad_pixels_stay_nan(self, tmp_path):
+        from astropy.io import fits
+
+        paths = self._frames(tmp_path)
+        data = fits.getdata(paths[0]).astype(float)
+        data[100, 100] = np.nan
+        _prepared_keck_frame(data).writeto(paths[0], overwrite=True)
+        (new_paths, _), _ = self._inject(tmp_path)
+        injected = fits.getdata(new_paths[0])
+        assert np.isnan(injected[100, 100])
+
+    def test_inject_psf_required(self, tmp_path):
+        from autoreduce.inject import keck as keck_mod
+
+        spec = _spec(tmp_path, instrument="nirc2_narrow", inject_pixel_scale=0.005)
+        spec = spec.__class__(**{**spec.as_dict(), "inject_psf": None})
+        with pytest.raises(ValueError, match="requires TargetSpec.inject_psf"):
+            keck_mod.inject_into_prepared(
+                [], spec, instruments.get("nirc2_narrow"), tmp_path, np.zeros((2, 2, 2))
+            )
+
+
 class TestPipelineGate:
-    def test_keck_instrument_is_loud(self, tmp_path):
+    def test_alma_is_loud(self, tmp_path):
         from autoreduce.pipeline import reduce_target
 
-        spec = _spec(tmp_path, instrument="nirc2_narrow")
-        with pytest.raises(ValueError, match="phases 1-2a"):
+        spec = _spec(tmp_path, instrument="alma")
+        with pytest.raises(ValueError, match="phases 1-2b"):
             reduce_target(spec, tmp_path / "cache", tmp_path / "out")
 
-    def test_jwst_backend_admitted_past_gate(self, tmp_path, monkeypatch):
-        # The gate must not reject nircam; acquisition is stubbed to fail
-        # loudly AFTER the gate so no network is touched.
+    def test_jwst_and_keck_admitted_past_gate(self, tmp_path, monkeypatch):
+        # The gate must not reject nircam/nirc2; acquisition is stubbed to
+        # fail loudly AFTER the gate so no network is touched.
         from autoreduce import pipeline as pipeline_mod
 
         def boom(ctx):
             raise RuntimeError("gate passed; acquire reached")
 
         monkeypatch.setattr(pipeline_mod, "_acquire", boom)
-        spec = _spec(tmp_path, instrument="nircam_lw")
-        with pytest.raises(RuntimeError, match="gate passed"):
-            pipeline_mod.reduce_target(spec, tmp_path / "cache", tmp_path / "out")
+        for instrument in ("nircam_lw", "nirc2_narrow"):
+            spec = _spec(tmp_path, instrument=instrument)
+            with pytest.raises(RuntimeError, match="gate passed"):
+                pipeline_mod.reduce_target(
+                    spec, tmp_path / "cache", tmp_path / "out"
+                )

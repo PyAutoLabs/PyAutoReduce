@@ -150,7 +150,17 @@ externally and hand PyAutoReduce the result.
      re-measured registration unchanged in expectation; the recovery
      spike (`prototypes/inject_recovery_keck.py`, B1938+666) checks the
      offsets with and without injection.
-3. **ALMA** — `simobserve` acquire-alternative + optional uv-plane injection.
+3. **ALMA — in progress (issue #56)**: the `simobserve`
+   acquire-alternative on the visibility branch — `inject_image`
+   (Jy/pixel, the phase-2a flux contract) → 4-axis sky model → headless
+   `simobserve` (`alma_sim_*` dials: antennalist, totaltime,
+   integration, frequency, pwv; pwv 0 = noiseless) → the existing
+   `split → extract → assemble → package` unchanged →
+   `al.Interferometer.from_fits`. **uv-plane injection into a real MS
+   (the true Balrog analogue) is deferred**: it needs FT-at-uv-points
+   and phase-centre machinery this mode doesn't, and this mode fully
+   answers the original ask; file it as its own prompt if real-MS
+   calibration systematics ever matter to a simulation study.
 4. *(deferred, likely never)* raw-frame simulation — revisit only if a
    validated community simulator for HST imaging appears.
 

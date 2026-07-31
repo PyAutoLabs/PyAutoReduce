@@ -47,6 +47,33 @@ def references_present(references_root: Path, adapter: InstrumentAdapter) -> boo
     return ref_dir.is_dir() and any(ref_dir.iterdir())
 
 
+def should_sync(
+    observatory: str, sync_references: bool, present: bool
+) -> bool:
+    """
+    Decide the bestrefs step for this run; pure function, unit-testable.
+
+    CRDS revises reference files on its own schedule, independent of the
+    exposure cache — so a fully-cached rerun still re-syncs by default
+    (bestrefs is a cheap metadata check when nothing is stale; issue #63).
+    ``sync_references=False`` is the explicit offline opt-out, valid only
+    when a previous run already populated the reference cache. The jwst
+    pipeline syncs its own references lazily through CRDS_PATH, so the
+    explicit bestrefs step is HST-only.
+    """
+    if observatory != "hst":
+        return False
+    if sync_references:
+        return True
+    if not present:
+        raise RuntimeError(
+            "sync_references=False but no CRDS references are cached — "
+            "an offline run needs a reference cache populated by a "
+            "previous synced run"
+        )
+    return False
+
+
 def sync_best_references(exposures: List[Path]) -> None:
     """Fetch + assign best references for the exposures (network)."""
     if not exposures:

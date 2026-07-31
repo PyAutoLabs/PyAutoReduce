@@ -209,13 +209,11 @@ def _acquire(ctx: _StageContext) -> None:
             spec.name, [str(p) for p in exposures], source="mast"
         )
         downloaded = True
-    # Fully-cached re-runs with references already synced stay offline.
-    # The jwst pipeline syncs its own references lazily through CRDS_PATH,
-    # so explicit bestrefs is an HST-observatory step.
     refs_synced = False
-    if adapter.observatory == "hst" and (
-        downloaded
-        or not crds_mod.references_present(cache.references_dir, adapter)
+    if crds_mod.should_sync(
+        adapter.observatory,
+        spec.sync_references,
+        crds_mod.references_present(cache.references_dir, adapter),
     ):
         crds_mod.sync_best_references(exposures)
         refs_synced = True

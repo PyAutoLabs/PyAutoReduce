@@ -64,10 +64,14 @@ exposures current with the best reference files.
   size.
 - **Reference files are acquisition too** (spike finding): AstroDrizzle's IVM
   weighting resolves ACS calibration files through ``jref$``, so the acquire
-  stage syncs CRDS best references for the downloaded exposures
+  stage syncs CRDS best references for the exposures
   (``crds.bestrefs --sync-references=1 --update-bestrefs``) into the cache and
-  exports ``CRDS_PATH``/``jref``. Reference files are shared across targets
-  and are the one cache component *not* evicted per target.
+  exports ``CRDS_PATH``/``jref``. The sync runs on every run — CRDS revises
+  reference files independently of the exposure cache, so a cached rerun
+  re-syncs too (cheap when nothing is stale; #63). ``sync_references=False``
+  is the explicit offline opt-out, valid only over a previously-synced cache.
+  Reference files are shared across targets and are the one cache component
+  *not* evicted per target.
 
 **Query hygiene** (spike finding): a plain coordinate query also matches HAP
 skycell products, whose member lists re-reference the same exposures many

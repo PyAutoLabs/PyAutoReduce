@@ -27,6 +27,12 @@ class TargetSpec:
     # calibration-level-2 observations at the coordinates).
     proposal_ids: Optional[Tuple[str, ...]] = None
 
+    # CRDS reference files are revised on their own schedule, independent of
+    # the exposure cache, so bestrefs re-syncs on every HST run by default.
+    # False = explicit offline opt-out for a previously-synced cache
+    # (reproducing a past run without network).
+    sync_references: bool = True
+
     cutout_shape: Tuple[int, int] = (281, 281)
 
     # Drizzle dials (design doc stage 3). pixfrac and kernel are deliberately

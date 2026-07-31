@@ -62,6 +62,32 @@ class TestInstrumentRegistry:
         assert instruments.get("acs_wfc").scale_ratio(0.03) == pytest.approx(0.6)
 
 
+class TestReferenceSyncDecision:
+    def test_hst_syncs_by_default_even_when_references_present(self):
+        # Reference files update independently of the exposure cache, so a
+        # fully-cached rerun still re-syncs (#63).
+        from autoreduce.acquire.crds import should_sync
+
+        assert should_sync("hst", sync_references=True, present=True)
+        assert should_sync("hst", sync_references=True, present=False)
+
+    def test_explicit_offline_opt_out_needs_a_populated_cache(self):
+        from autoreduce.acquire.crds import should_sync
+
+        assert not should_sync("hst", sync_references=False, present=True)
+        with pytest.raises(RuntimeError, match="offline run needs"):
+            should_sync("hst", sync_references=False, present=False)
+
+    def test_non_hst_never_runs_explicit_bestrefs(self):
+        from autoreduce.acquire.crds import should_sync
+
+        assert not should_sync("jwst", sync_references=True, present=False)
+        assert not should_sync("keck", sync_references=True, present=False)
+
+    def test_spec_defaults_to_syncing(self):
+        assert TargetSpec(name="x", ra=0.0, dec=0.0).sync_references is True
+
+
 def test_drizzle_kwargs_single_vs_multi_exposure():
     from autoreduce.drizzle.combine import drizzle_kwargs_for
 

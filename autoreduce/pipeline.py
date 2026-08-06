@@ -25,6 +25,7 @@ from .drizzle import combine as combine_mod
 from .drizzle.diagnostics import check_weight_uniformity
 from .instruments import InstrumentAdapter
 from .noise import rms as rms_mod
+from .package import cosmic_rays as cr_mod
 from .package import cutout as cutout_mod
 from .package import frames as frames_mod
 from .package import provenance as provenance_mod
@@ -481,6 +482,57 @@ def _noise(ctx: _StageContext, sci, wht, exptime: float) -> np.ndarray:
     return noise
 
 
+def _star_pass_image(ctx: _StageContext, sci, header):
+    """
+    The mosaic that PSF star finding + stamp extraction run on (issue #62),
+    decoupled from the shipped science mosaic: driz_cr's blotted-median
+    rejection reads systematically low on star cores, holing PSF stars
+    before DAOStarFinder sees them. Returns (image, header, provenance) —
+    provenance always records which pass fed the stars, so the coupling
+    cannot silently regress.
+
+    ``psf_star_pass="auto"`` (default) never adds a drizzle: it uses the
+    science mosaic, which is already the least-CR-rejected pass at zero
+    cost when no stack rejection ran (single-exposure branch, per-frame
+    cr_method, non-astrodrizzle backends) — and otherwise is simply the
+    only pass available without doubling combine time. The explicit
+    ``"no_cr"`` opt-in buys the dedicated CR-flag-ignoring pass with a
+    second full AstroDrizzle run.
+    """
+    spec, adapter = ctx.spec, ctx.adapter
+    single = bool(ctx.record["drizzle"].get("single_exposure_branch"))
+    if spec.psf_star_pass == "no_cr" and not single:
+        from astropy.io import fits
+
+        sci_path, kwargs = combine_mod.combine_star_pass(
+            ctx.exposures, spec, adapter, ctx.work_dir
+        )
+        with fits.open(sci_path) as hdul:
+            star_sci = hdul[0].data.astype(float)
+            star_header = hdul[0].header.copy()
+        return star_sci, star_header, {
+            "star_source_pass": "no_cr_drizzle",
+            "star_pass_kwargs": {k: kwargs[k] for k in sorted(kwargs)},
+        }
+    if single:
+        reason = "single-exposure branch: no CR rejection ran"
+    elif getattr(adapter, "combine_backend", None) != "astrodrizzle":
+        reason = (
+            f"combine backend {adapter.combine_backend!r}: the dedicated "
+            "star pass applies to the astrodrizzle path only"
+        )
+    elif spec.cr_method != "driz_cr":
+        reason = f"cr_method={spec.cr_method!r}: per-frame CR masks, no stack rejection"
+    elif spec.psf_star_pass == "science":
+        reason = "psf_star_pass='science': pinned to the shipped mosaic"
+    else:
+        reason = (
+            "psf_star_pass='auto': no cheaper less-CR-rejected pass exists; "
+            "opt into 'no_cr' for a dedicated star drizzle"
+        )
+    return sci, header, {"star_source_pass": "science", "star_source_reason": reason}
+
+
 def _psf(ctx: _StageContext, sci, header, noise=None):
     from astropy.io import fits
     from astropy.wcs import WCS
@@ -521,7 +573,8 @@ def _psf(ctx: _StageContext, sci, header, noise=None):
         )
         ctx.record["psf"] = diag
         return psf, psf_full
-    target_xy = WCS(header).world_to_pixel_values(spec.ra, spec.dec)
+    star_sci, star_header, star_pass_prov = _star_pass_image(ctx, sci, header)
+    target_xy = WCS(star_header).world_to_pixel_values(spec.ra, spec.dec)
     selection = stars_mod.StarSelection()
     max_single_exptime = adapter.max_single_exposure_seconds(
         [fits.getheader(p) for p in ctx.exposures]
@@ -532,7 +585,7 @@ def _psf(ctx: _StageContext, sci, header, noise=None):
         else None
     )
     stars = stars_mod.find_stars(
-        sci,
+        star_sci,
         selection,
         target_xy=(float(target_xy[0]), float(target_xy[1])),
         peak_max=peak_max,
@@ -548,18 +601,21 @@ def _psf(ctx: _StageContext, sci, header, noise=None):
                 "psf_backend='starred' needs the noise map (STARRED weights "
                 "stars by per-pixel noise); pipeline did not pass it"
             )
+        # Stamps come from the star pass; the science-pass noise map is a
+        # faithful weight there (same exposures/geometry — the passes differ
+        # only in which pixels CR rejection removed).
         psf, psf_full, psf_diag = starred_mod.build_starred_epsf(
-            sci, noise, stars, spec.psf_shape, spec.psf_full_shape
+            star_sci, noise, stars, spec.psf_shape, spec.psf_full_shape
         )
     else:
         psf, psf_full, psf_diag = epsf_mod.build_epsf(
-            sci, stars, spec.psf_shape, spec.psf_full_shape
+            star_sci, stars, spec.psf_shape, spec.psf_full_shape
         )
     if adapter.observatory == "keck":
         # Tier B: in-field ePSF. Usable, but an AO PSF from field stars at a
         # different anisoplanatic angle is still provisional by contract.
         psf_diag = {"psf_provisional": True, **psf_diag}
-    ctx.record["psf"] = psf_diag
+    ctx.record["psf"] = {**star_pass_prov, **psf_diag}
     return psf, psf_full
 
 
@@ -704,6 +760,28 @@ def reduce_target(
         raise ValueError(
             "psf_from_frames supports HST and JWST only "
             f"(instrument {spec.instrument!r})"
+        )
+    backend = getattr(adapter, "combine_backend", None)
+    if spec.cr_method != "driz_cr" and backend != "astrodrizzle":
+        raise ValueError(
+            f"cr_method={spec.cr_method!r} supports the HST astrodrizzle "
+            f"path only (instrument {spec.instrument!r})"
+        )
+    if spec.cr_method == "deepcr" and spec.instrument not in cr_mod.DEEPCR_MODELS:
+        raise ValueError(
+            f"cr_method='deepcr' needs a registered deepCR model; none for "
+            f"{spec.instrument!r} (known: {sorted(cr_mod.DEEPCR_MODELS)}; "
+            "wfc3_ir cosmic rays are already per-frame flagged by calwf3 "
+            "ramp fitting)"
+        )
+    if spec.psf_star_pass == "no_cr" and (
+        backend != "astrodrizzle" or spec.psf_from_frames
+    ):
+        raise ValueError(
+            "psf_star_pass='no_cr' builds a second AstroDrizzle pass for "
+            "mosaic star finding — HST astrodrizzle path without "
+            f"psf_from_frames only (instrument {spec.instrument!r}, "
+            f"psf_from_frames={spec.psf_from_frames})"
         )
     if spec.inject_image and adapter.domain != "visibility" and (
         observatory, getattr(adapter, "combine_backend", None)

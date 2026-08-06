@@ -42,6 +42,20 @@ class TargetSpec:
     final_pixfrac: float = 0.8
     final_kernel: str = "square"
 
+    # Cosmic-ray rejection route for multi-exposure AstroDrizzle combines
+    # (issue #61). "driz_cr" (STScI default): blotted-median reference +
+    # driz_cr — on steep gradients (galaxy cores, stars) the sub-pixel-
+    # dithered median reads systematically low, so genuine core flux can be
+    # flagged as CR. "deepcr": per-frame deepCR masks written into each
+    # exposure's DQ arrays (the AstroDrizzle CR bit, 4096), then a plain
+    # weighted-mean drizzle with median/blot/driz_cr off and resetbits=0
+    # (the default resetbits, 4096, would clear exactly the bit the masks
+    # were written into). #61's reporter used LACosmic; the pipeline's
+    # established per-frame CR machinery is deepCR (package/cosmic_rays.py),
+    # reused here instead of adding a dependency. Default deliberately
+    # unchanged pending SLACS validation (see hst_acs_pipeline.md stage 3).
+    cr_method: str = "driz_cr"
+
     # PSF products (design doc stage 5).
     psf_shape: Tuple[int, int] = (21, 21)
     psf_full_shape: Tuple[int, int] = (61, 61)
@@ -63,6 +77,18 @@ class TargetSpec:
     # the optional `pyautoreduce[starred]` extra — GPL/JAX, isolated). Ignored
     # when psf_from_frames or the Keck tier-A path own the PSF stage.
     psf_backend: str = "epsf"
+
+    # Which drizzle pass feeds mosaic PSF star finding + stamp extraction
+    # (issue #62): driz_cr's core rejection can hole PSF-star cores before
+    # DAOStarFinder sees them, so the star pass is decoupled from the
+    # shipped science mosaic. "auto" (default): the least-CR-rejected pass
+    # that costs no extra drizzle — today that is always the science mosaic
+    # (recorded with the reason); "science": pin star finding to the shipped
+    # mosaic; "no_cr": build a dedicated CR-flag-ignoring drizzle for the
+    # stars — an explicit opt-in, because it is a second full AstroDrizzle
+    # pass (HST astrodrizzle path only). Provenance records which pass fed
+    # the stars either way.
+    psf_star_pass: str = "auto"
 
     # Alignment: residual (pixels) above which TweakReg refinement triggers.
     alignment_tolerance_pix: float = 0.1
@@ -135,6 +161,15 @@ class TargetSpec:
             raise ValueError(f"dec out of range: {self.dec}")
         if not 0.0 < self.final_pixfrac <= 1.0:
             raise ValueError(f"final_pixfrac must be in (0, 1]: {self.final_pixfrac}")
+        if self.cr_method not in ("driz_cr", "deepcr"):
+            raise ValueError(
+                f"cr_method must be 'driz_cr' or 'deepcr': {self.cr_method!r}"
+            )
+        if self.psf_star_pass not in ("auto", "science", "no_cr"):
+            raise ValueError(
+                "psf_star_pass must be 'auto', 'science' or 'no_cr': "
+                f"{self.psf_star_pass!r}"
+            )
         if self.alma_width < 0:
             raise ValueError(
                 f"alma_width must be >= 0 (0 = collapse the spw): {self.alma_width}"

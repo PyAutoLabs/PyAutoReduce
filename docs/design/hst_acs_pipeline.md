@@ -114,6 +114,27 @@ median-combine baseline), final drizzle of all exposures onto one grid.
 Undrizzled artifacts (`_single_sci`, masks) stay in the transient cache; only
 the mosaic + weight map proceed.
 
+**Cosmic-ray rejection — `TargetSpec.cr_method` (issue #61).** The default
+stays the STScI flow above: `driz_cr` against the blotted-median stack. On
+steep gradients (deflector cores, PSF stars) that median reference reads
+systematically low — sub-pixel dither shifts smear the peak — so driz_cr can
+flag genuine core flux as cosmic rays; #61 measured ~37% deflector-core flux
+loss on SLACS ACS/WFC F814W at the pipeline thresholds, worse with looser
+ones. `cr_method="deepcr"` is the documented per-frame alternative: deepCR
+masks — the per-frame CR machinery frame products already use; #61's reporter
+used L.A.Cosmic (van Dokkum 2001, per-frame Laplacian), and deepCR is the
+same no-median-reference class without adding a dependency — are written into
+each exposure's DQ as the AstroDrizzle CR bit (4096), followed by a plain
+weighted-mean drizzle (`median=blot=driz_cr=False`) with **`resetbits=0`**.
+That last keyword is load-bearing: AstroDrizzle's default `resetbits=4096`
+clears exactly the DQ bit the masks were written into, silently producing an
+unmasked mosaic that can score flawlessly against itself (#61's trap, pinned
+by unit test). **The default flip is deliberately human-gated on SLACS
+validation** with two comparison arms: the per-frame route vs a *tuned*
+driz_cr (raising `driz_cr_scale`/`driz_cr_snr` per STScI guidance — published
+reprocessing used 1.5/1.2 against the pipeline default 1.2/0.7). Until that
+lands, `driz_cr` remains the default and the dial is opt-in.
+
 **The SLACS-V caveat (literature finding):** [Bolton et al.
 2008](https://arxiv.org/abs/0805.1931) did **not** drizzle the F814W snapshot
 data — "the 'drizzle' re-sampling algorithm … is not well suited to
@@ -206,6 +227,21 @@ mosaic. Never pair a native-frame PSF with a drizzled image.
   under-concentrated — and the photutils ePSF wins there (consistent with the
   #35 adversarial undersampling result). Prefer STARRED for well-sampled and
   crowded/few-star fields; keep photutils (or Tier 2) for undersampled SW.
+- **Star-pass decoupling — `TargetSpec.psf_star_pass` (issue #62):** Tier-1/1b
+  star finding *and* stamp extraction draw from the least-CR-rejected drizzle
+  pass, decoupled from the shipped science mosaic: driz_cr's blotted-median
+  rejection holes star cores before DAOStarFinder sees them (#62 measured
+  344→599 usable stars, +74%, rebuilding from a no-CR pass, rescuing 4
+  lens/filter pairs from the model-PSF fallback). `"auto"` (default) never
+  adds a drizzle — the science mosaic is used and the choice + reason
+  recorded (it is genuinely the least-rejected pass on the single-exposure
+  branch and the per-frame `cr_method="deepcr"` route); `"no_cr"` is the
+  explicit opt-in that drizzles a second, CR-flag-ignoring star pass
+  (`final_bits | 4096`; `resetbits=0` so the science pass's DQ flags survive
+  for frame products) onto the same grid — same kernel/pixfrac/scale/rot, so
+  the drizzled-PSF invariant holds; `"science"` pins star finding to the
+  shipped mosaic. The `reduction.json` `psf` block records
+  `star_source_pass` in every case, so the coupling cannot silently regress.
 - **Tier 2 — TinyTim + focus model** (fallback; SLACS elliptical snapshot
   fields are typically star-poor): model PSFs raytraced per exposure with
   TinyTim, focus ("breathing") estimated by matching whatever stars exist,

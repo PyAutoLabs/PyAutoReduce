@@ -283,3 +283,126 @@ def test_registered_ratios_recovers_known_shift_and_scale():
 
     with pytest.raises(ValueError, match="shape mismatch"):
         registered_ratios(new_data[:100], new_noise[:100], ref_data, ref_noise)
+
+
+class TestStarPassDecoupling:
+    """_psf's star-source pass selection (issue #62): star finding is
+    decoupled from the shipped science mosaic, and provenance always
+    records which pass fed the stars."""
+
+    def _ctx(self, spec, single_exposure, work_dir=None):
+        from pathlib import Path
+
+        from autoreduce import instruments
+        from autoreduce.pipeline import _StageContext
+
+        ctx = _StageContext(
+            spec=spec,
+            adapter=instruments.get("acs_wfc"),
+            cache=None,
+            out_dir=Path("."),
+            work_dir=work_dir or Path("."),
+        )
+        ctx.record["drizzle"] = {"single_exposure_branch": single_exposure}
+        return ctx
+
+    def _spec(self, **overrides):
+        from autoreduce.target import TargetSpec
+
+        return TargetSpec(name="lens", ra=2.0, dec=-0.1, **overrides)
+
+    def test_auto_default_uses_science_mosaic_and_records_why(self):
+        from autoreduce.pipeline import _star_pass_image
+
+        ctx = self._ctx(self._spec(), single_exposure=False)
+        sci, header = np.zeros((5, 5)), object()
+        star_sci, star_header, prov = _star_pass_image(ctx, sci, header)
+        assert star_sci is sci and star_header is header
+        assert prov["star_source_pass"] == "science"
+        assert "no_cr" in prov["star_source_reason"]
+
+    def test_single_exposure_branch_is_already_least_rejected(self):
+        from autoreduce.pipeline import _star_pass_image
+
+        ctx = self._ctx(self._spec(psf_star_pass="no_cr"), single_exposure=True)
+        sci, header = np.zeros((5, 5)), object()
+        star_sci, _, prov = _star_pass_image(ctx, sci, header)
+        # "no_cr" on the single-exposure branch never drizzles again: the
+        # science mosaic had no CR rejection to begin with.
+        assert star_sci is sci
+        assert prov["star_source_pass"] == "science"
+        assert "single-exposure" in prov["star_source_reason"]
+
+    def test_deepcr_route_records_per_frame_reason(self):
+        from autoreduce.pipeline import _star_pass_image
+
+        ctx = self._ctx(self._spec(cr_method="deepcr"), single_exposure=False)
+        _, _, prov = _star_pass_image(ctx, np.zeros((5, 5)), object())
+        assert prov["star_source_pass"] == "science"
+        assert "deepcr" in prov["star_source_reason"]
+
+    def test_no_cr_opt_in_builds_the_dedicated_pass(self, monkeypatch, tmp_path):
+        from astropy.io import fits
+
+        from autoreduce import pipeline as pipeline_mod
+        from autoreduce.pipeline import _star_pass_image
+
+        star_path = tmp_path / "lens_f814w_starpass_sci.fits"
+        fits.PrimaryHDU(np.full((4, 4), 7.0, dtype=np.float32)).writeto(star_path)
+        calls = {}
+
+        def fake_star_pass(exposures, spec, adapter, output_dir):
+            calls["output_dir"] = output_dir
+            return star_path, {"resetbits": 0, "driz_cr": False}
+
+        monkeypatch.setattr(
+            pipeline_mod.combine_mod, "combine_star_pass", fake_star_pass
+        )
+        ctx = self._ctx(
+            self._spec(psf_star_pass="no_cr"),
+            single_exposure=False,
+            work_dir=tmp_path,
+        )
+        science = np.zeros((5, 5))
+        star_sci, star_header, prov = _star_pass_image(ctx, science, object())
+        assert calls["output_dir"] == tmp_path
+        assert star_sci is not science
+        assert star_sci[0, 0] == pytest.approx(7.0)
+        assert prov["star_source_pass"] == "no_cr_drizzle"
+        assert prov["star_pass_kwargs"]["resetbits"] == 0
+
+
+class TestCrDialFailFast:
+    """reduce_target rejects unsupported dial/instrument combinations
+    before any download (issues #61/#62)."""
+
+    def _reduce(self, tmp_path, **spec_overrides):
+        from autoreduce.pipeline import reduce_target
+        from autoreduce.target import TargetSpec
+
+        spec = TargetSpec(name="x", ra=2.0, dec=-0.1, **spec_overrides)
+        return reduce_target(
+            spec, cache_root=tmp_path / "cache", output_root=tmp_path / "out"
+        )
+
+    def test_deepcr_needs_the_astrodrizzle_backend(self, tmp_path):
+        with pytest.raises(ValueError, match="astrodrizzle"):
+            self._reduce(tmp_path, instrument="nircam_lw", cr_method="deepcr")
+
+    def test_deepcr_needs_a_registered_model(self, tmp_path):
+        # wfc3_ir is astrodrizzle-combined but has no deepCR model — its
+        # cosmic rays are already per-frame flagged by calwf3 ramp fitting.
+        with pytest.raises(ValueError, match="deepCR model"):
+            self._reduce(tmp_path, instrument="wfc3_ir", cr_method="deepcr")
+
+    def test_no_cr_star_pass_needs_the_astrodrizzle_backend(self, tmp_path):
+        with pytest.raises(ValueError, match="psf_star_pass"):
+            self._reduce(tmp_path, instrument="nircam_lw", psf_star_pass="no_cr")
+
+    def test_no_cr_star_pass_conflicts_with_psf_from_frames(self, tmp_path):
+        # psf_from_frames never finds stars on the mosaic; a silent no-op of
+        # an explicitly requested second drizzle would hide the mistake.
+        with pytest.raises(ValueError, match="psf_star_pass"):
+            self._reduce(
+                tmp_path, psf_star_pass="no_cr", psf_from_frames=True
+            )

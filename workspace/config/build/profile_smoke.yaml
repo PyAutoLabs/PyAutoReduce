@@ -1,0 +1,16 @@
+# Per-script environment variable configuration for automated runs
+# (smoke tests, pre-release checks, CI).
+#
+# "defaults" are applied to every script on top of the inherited environment.
+# "overrides" (none yet) selectively unset or replace vars for matching path
+# patterns — patterns containing '/' substring-match the file path, patterns
+# without '/' match the file stem exactly.
+#
+# This workspace's scripts perform real archive reductions, so none run in CI
+# smoke tests yet (see smoke_tests.txt). The defaults below exist so that any
+# script which does run in a sandboxed environment inherits writable cache
+# directories for numba and matplotlib.
+
+defaults:
+  NUMBA_CACHE_DIR: "/tmp/numba_cache"       # Writable cache dir for numba
+  MPLCONFIGDIR: "/tmp/matplotlib"           # Writable config dir for matplotlib

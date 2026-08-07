@@ -42,6 +42,19 @@ class TargetSpec:
     final_pixfrac: float = 0.8
     final_kernel: str = "square"
 
+    # DQ bits AstroDrizzle treats as GOOD (issue #65). None = use the
+    # adapter's exposure-count-keyed table, which mirrors STScI's MDRIZTAB
+    # reference files; an explicit value overrides it at every N. Set both
+    # deliberately: `driz_sep_bits` governs the separate drizzle that builds
+    # the CR-rejection median (inert on the single-exposure branch), while
+    # `final_bits` governs the shipped mosaic. Leaving them None is the
+    # normal case — the dial exists because the *previous* behaviour was an
+    # unintended inheritance of drizzlepac's package default `final_bits=0`,
+    # which treats no bit as good and rejects every flagged pixel, including
+    # the hot/warm/blob pixels calacs/calwf3 have already corrected.
+    final_bits: Optional[int] = None
+    driz_sep_bits: Optional[int] = None
+
     # Cosmic-ray rejection route for multi-exposure AstroDrizzle combines
     # (issue #61). "driz_cr" (STScI default): blotted-median reference +
     # driz_cr — on steep gradients (galaxy cores, stars) the sub-pixel-
@@ -161,6 +174,13 @@ class TargetSpec:
             raise ValueError(f"dec out of range: {self.dec}")
         if not 0.0 < self.final_pixfrac <= 1.0:
             raise ValueError(f"final_pixfrac must be in (0, 1]: {self.final_pixfrac}")
+        for bits_name in ("final_bits", "driz_sep_bits"):
+            bits = getattr(self, bits_name)
+            if bits is not None and (not isinstance(bits, int) or bits < 0):
+                raise ValueError(
+                    f"{bits_name} must be a non-negative int bitmask or None "
+                    f"(None = the adapter's MDRIZTAB-derived default): {bits!r}"
+                )
         if self.cr_method not in ("driz_cr", "deepcr"):
             raise ValueError(
                 f"cr_method must be 'driz_cr' or 'deepcr': {self.cr_method!r}"

@@ -114,6 +114,50 @@ median-combine baseline), final drizzle of all exposures onto one grid.
 Undrizzled artifacts (`_single_sci`, masks) stay in the transient cache; only
 the mosaic + weight map proceed.
 
+**DQ bits — which flagged pixels count as good (issue #65).** Not a deviation:
+this is the pipeline *returning* to STScI practice. No bits keyword was
+emitted anywhere until this landed, so every reduction inherited drizzlepac's
+package default `final_bits = "0"` (`drizzlepac/pars/astrodrizzle.cfg:101`),
+which treats **no** DQ bit as good and rejects every flagged pixel — including
+the hot, warm and saturated pixels that `calacs`/`calwf3` have already
+corrected. The adapters now mirror STScI's MDRIZTAB reference files, keyed on
+exposure count:
+
+| Detector | Reference file | `numimages` | `driz_sep_bits` | `final_bits` |
+|---|---|---|---|---|
+| ACS/WFC | `acs/37g1550cj_mdz.fits` | 1 | 65535 | 65535 |
+| ACS/WFC | " | ≥2 | 336 | **336** |
+| WFC3/UVIS | `wfc3/2ck18260i_mdz.fits` | 1 | 65535 | 65535 |
+| WFC3/UVIS | " | ≥2 | 336 | **336** |
+
+`336 = 16 + 64 + 256` — hot, warm, saturated. `TargetSpec.final_bits` /
+`driz_sep_bits` override the table at every N; both the value and its source
+(`adapter_mdriztab` / `target_spec` / `unset`) are recorded in
+`reduction.json`, so existing datasets stay re-derivable as the tables move.
+
+*Why it matters for lensing.* Rejecting hot (16) and warm (64) pixels on top
+of the genuine bad columns (4, 128) removes pixels that are partly
+**column-organised** on an aged ACS CCD — trap columns and CTE trails — so the
+IVM weight along those columns is *reduced* rather than zeroed. Noise then
+rises by `sqrt(N/(N-1))` per lost exposure: ×1.41 at N=2, ×1.22 at N=3, ×1.15
+at N=4, ×1.08 at N=7. Few-exposure targets stripe visibly and many-exposure
+ones do not, which is exactly the pattern reported on the F814W SLACS-gold
+noise maps (2026-08-04) and absent from the legacy SLACS reductions. The
+single-exposure row is an independent part of that story: SLACS SNAP data is
+the N=1 regime, where the standard recipe keeps every flagged pixel.
+
+**Not `mdriztab=True`.** MDRIZTAB carries the whole parameter set —
+`final_scale`, `final_pixfrac`, `final_kernel`, `final_rot` — so enabling it
+would silently revert the deviations in the table above. Only the bits columns
+are mirrored; our explicit kwargs stand.
+
+**Control test — not yet run.** Re-drizzle one striped SLACS target at the old
+`0` and at the MDRIZTAB value and diff the weight and noise maps; the stage-6
+local weight-deficit diagnostic gives that comparison an objective pass/fail.
+If the stripes do not move, the cause is elsewhere — exposure count, dither
+geometry, or genuine bad columns — and these defaults must be reverted rather
+than kept. Run it before these values reach a release.
+
 **Cosmic-ray rejection — `TargetSpec.cr_method` (issue #61).** The default
 stays the STScI flow above: `driz_cr` against the blotted-median stack. On
 steep gradients (deflector cores, PSF stars) that median reference reads
@@ -291,6 +335,36 @@ deviation from the legacy datasets' stripped headers, deliberately. Write the
 PSFs and `reduction.json`. Optionally emit the auxiliary modeling-prep files
 (`info.json` skeleton) but leave scientific annotations (positions, extra
 galaxies) to the modeling workflow — reduction ends at the dataset.
+
+**Coverage guards, and the gap between them (issue #65 leg 2).** Two guards
+run over the packaged cutout, and until leg 2 both answered only the
+*total*-loss question:
+
+- `noise.rms.mask_isolated_bad_pixels` masks isolated dead/rejected pixels and
+  fails loudly on structured clusters, on more than 0.5% of the cutout, or on
+  any bad pixel within `protect_radius_arcsec` (1.5″) of the target — but it
+  tests `~isfinite(noise) | noise <= 0`, so a pixel whose coverage is merely
+  *reduced* is never even a candidate.
+- `drizzle.diagnostics.weight_uniformity` is a global RMS/median over the
+  cutout against a 0.2 limit; the slacs0008 spike measured 0.066, and a
+  handful of degraded columns cannot shift it.
+
+Between them sits the ACS/WFC stripe class: finite, positive, but materially
+reduced IVM weight along a line through the deflector core. It passes both —
+including the 1.5″ protection whose whole purpose is to guarantee the lens
+itself is clean. `drizzle.diagnostics.check_local_weight_deficit` closes that
+gap: inside the same 1.5″ radius it reports the science-region median weight
+and the worst row/column median, each as a fraction of the cutout median, and
+records them in `reduction.json` beside `weight_uniformity_cutout`. Both axes
+are tested because a detector-column defect maps onto an image row or column
+depending on the frame's orientation on the sky.
+
+The limit (0.9) is **provisional and the verdict is recorded, never raised**:
+losing one exposure of N leaves weight (N-1)/N, so 0.9 detects a single lost
+exposure for any N ≤ 9 — the regime where the `sqrt(N/(N-1))` noise inflation
+is visible — but it has not been calibrated against real reductions, and a
+fatal guard at an uncalibrated limit would refuse datasets that are fine. The
+leg-1 control test is what calibrates it.
 
 ## Validation — SLACS parity study
 

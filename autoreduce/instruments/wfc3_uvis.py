@@ -26,5 +26,9 @@ WFC3_UVIS = register(
         },
         saturation_dn=63_000.0,
         recommended_final_scale=0.0396,
+        # MDRIZTAB wfc3/2ck18260i_mdz.fits (issue #65) — identical rows to
+        # ACS/WFC: 336 = 16 + 64 + 256 (hot, warm, saturated) once two or
+        # more exposures overlap.
+        dq_bits_rows=((1, 65535, 65535), (2, 336, 336)),
     )
 )

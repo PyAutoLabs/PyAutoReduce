@@ -119,6 +119,106 @@ def test_drizzle_kwargs_single_vs_multi_exposure():
         drizzle_kwargs_for(spec, adapter, 0)
 
 
+class TestDqBitsDial:
+    """
+    The exposure-count-keyed DQ-bits dial (issue #65 leg 1). Values mirror
+    STScI's MDRIZTAB reference files; before this, no bits keyword was ever
+    emitted and every reduction inherited drizzlepac's package default
+    `final_bits="0"` — no bit treated as good, every flagged pixel rejected.
+    """
+
+    def _bits(self, key, n, **spec_kwargs):
+        from autoreduce.drizzle.combine import drizzle_kwargs_for
+
+        spec = TargetSpec(name="x", ra=0.0, dec=0.0, **spec_kwargs)
+        kwargs = drizzle_kwargs_for(spec, instruments.get(key), n)
+        return kwargs["driz_sep_bits"], kwargs["final_bits"]
+
+    @pytest.mark.parametrize("key", ["acs_wfc", "wfc3_uvis"])
+    def test_acs_like_rows(self, key):
+        # Single exposure: every bit good — there is nothing to fill a masked
+        # pixel with, so the standard recipe keeps flagged pixels.
+        assert self._bits(key, 1) == (65535, 65535)
+        # N >= 2: 336 = 16 + 64 + 256 (hot, warm, saturated).
+        assert self._bits(key, 2) == (336, 336)
+        assert self._bits(key, 7) == (336, 336)
+        assert 336 == 16 | 64 | 256
+
+    def test_wfc3_ir_rows_differ_between_the_two_columns(self):
+        # The IR table is why this is a table and not a pair: at N = 2-3 the
+        # separate drizzle keeps every bit while the final drizzle is already
+        # at 528 = 512 + 16 (blob + hot).
+        assert self._bits("wfc3_ir", 1) == (65535, 65535)
+        assert self._bits("wfc3_ir", 2) == (65535, 528)
+        assert self._bits("wfc3_ir", 3) == (65535, 528)
+        assert self._bits("wfc3_ir", 4) == (528, 528)
+        assert 528 == 512 | 16
+
+    def test_pj011646_would_not_have_holed(self):
+        # The regression this leg exists for: PJ011646 was F160W with five
+        # exposures, so it lands on the numimages >= 4 row, where STScI
+        # passes exactly the blob bit (512) that punched the 123-px hole.
+        _, final_bits = self._bits("wfc3_ir", 5)
+        assert final_bits & 512
+
+    def test_target_spec_overrides_the_adapter_at_every_n(self):
+        assert self._bits("acs_wfc", 4, final_bits=0) == (336, 0)
+        assert self._bits("acs_wfc", 1, driz_sep_bits=8) == (8, 65535)
+        assert self._bits("wfc3_ir", 5, final_bits=65535, driz_sep_bits=65535) == (
+            65535,
+            65535,
+        )
+
+    def test_non_hst_adapters_emit_no_bits_keywords(self):
+        # jwst_image3 / nirc2_native have no such keyword; the key must be
+        # ABSENT rather than 0, since 0 is drizzlepac's "no bit is good".
+        from autoreduce.drizzle.combine import drizzle_kwargs_for
+
+        for key in ("nircam_sw", "nirc2_narrow"):
+            adapter = instruments.get(key)
+            assert adapter.dq_bits_for(4) is None
+            kwargs = drizzle_kwargs_for(
+                TargetSpec(name="x", ra=0.0, dec=0.0), adapter, 4
+            )
+            assert "final_bits" not in kwargs
+            assert "driz_sep_bits" not in kwargs
+
+    def test_invalid_bits_raise_at_spec_construction(self):
+        with pytest.raises(ValueError, match="final_bits"):
+            TargetSpec(name="x", ra=0.0, dec=0.0, final_bits=-1)
+        with pytest.raises(ValueError, match="driz_sep_bits"):
+            TargetSpec(name="x", ra=0.0, dec=0.0, driz_sep_bits="336")
+
+    def test_zero_exposures_still_raises(self):
+        with pytest.raises(ValueError, match="at least one exposure"):
+            instruments.get("acs_wfc").dq_bits_for(0)
+
+    def test_provenance_records_value_and_source(self):
+        from autoreduce.drizzle.combine import dq_bits_provenance
+
+        adapter = instruments.get("wfc3_ir")
+        default = dq_bits_provenance(TargetSpec(name="x", ra=0.0, dec=0.0), adapter, 5)
+        assert default["final_bits"] == 528
+        assert default["final_bits_source"] == "adapter_mdriztab"
+        assert default["adapter_row_min_exposures"] == 4
+        assert default["n_exposures"] == 5
+
+        overridden = dq_bits_provenance(
+            TargetSpec(name="x", ra=0.0, dec=0.0, final_bits=65535), adapter, 5
+        )
+        assert overridden["final_bits"] == 65535
+        assert overridden["final_bits_source"] == "target_spec"
+        # A partial override leaves the other column on the adapter default.
+        assert overridden["driz_sep_bits_source"] == "adapter_mdriztab"
+
+        unset = dq_bits_provenance(
+            TargetSpec(name="x", ra=0.0, dec=0.0), instruments.get("nircam_sw"), 4
+        )
+        assert unset["final_bits"] is None
+        assert unset["final_bits_source"] == "unset"
+        assert "adapter_row_min_exposures" not in unset
+
+
 class TestCrMethodDrizzleKwargs:
     """The cr_method routes through drizzle_kwargs_for (issue #61)."""
 
@@ -168,6 +268,9 @@ class TestCrMethodDrizzleKwargs:
         assert not (kwargs["driz_cr"] or kwargs["median"] or kwargs["blot"])
         assert kwargs["resetbits"] == 0
         assert kwargs["final_bits"] & CR_DQ_BIT
+        # It ORs onto whatever the science pass resolved, so it inherits the
+        # bits dial (#65) rather than the old `.get("final_bits", 0)` zero.
+        assert kwargs["final_bits"] == 336 | CR_DQ_BIT
 
 
 class TestDqCrFlagWrite:

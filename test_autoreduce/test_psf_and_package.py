@@ -200,6 +200,119 @@ def test_weight_uniformity_diagnostic():
         weight_uniformity(np.zeros((5, 5)))
 
 
+class TestLocalWeightDeficit:
+    """
+    The local coverage guard (issue #65 leg 2) — the detector for the ACS
+    stripe class that both pre-existing guards pass silently.
+    """
+
+    # 0.05"/pix, so the 1.5" science radius is 30 px around the centre.
+    PIXEL_SCALE = 0.05
+    CENTER = (60.0, 60.0)
+
+    def _striped(self, n_exposures=4):
+        """
+        Uniform coverage with one column through the lens core down to
+        (N-1)/N — one exposure lost along a CCD column, finite and positive
+        throughout, exactly the reported failure.
+        """
+        wht = np.full((121, 121), 100.0)
+        wht[:, 60] = 100.0 * (n_exposures - 1) / n_exposures
+        return wht
+
+    def test_flat_coverage_is_clean(self):
+        from autoreduce.drizzle.diagnostics import check_local_weight_deficit
+
+        verdict = check_local_weight_deficit(
+            np.full((121, 121), 100.0), self.CENTER, self.PIXEL_SCALE
+        )
+        assert verdict["acceptable"]
+        assert verdict["science_median_ratio"] == pytest.approx(1.0)
+        assert verdict["min_line_ratio"] == pytest.approx(1.0)
+
+    def test_stripe_through_the_core_is_caught(self):
+        from autoreduce.drizzle.diagnostics import check_local_weight_deficit
+
+        verdict = check_local_weight_deficit(
+            self._striped(4), self.CENTER, self.PIXEL_SCALE
+        )
+        assert not verdict["acceptable"]
+        # One lost exposure of four: the column sits at 3/4 of the median...
+        assert verdict["min_line_ratio"] == pytest.approx(0.75)
+        assert verdict["min_line_axis"] == "column"
+        assert verdict["min_line_index"] == 60
+        # ...while the science region as a whole barely notices it, which is
+        # precisely why a region-median test alone would not do.
+        assert verdict["science_median_ratio"] == pytest.approx(1.0)
+
+    def test_the_existing_guards_are_blind_to_the_same_map(self):
+        # The regression this leg exists for: without the diagnostic above,
+        # a striped reduction ships clean.
+        from autoreduce.drizzle.diagnostics import check_weight_uniformity
+        from autoreduce.noise.rms import mask_isolated_bad_pixels
+
+        wht = self._striped(4)
+        assert check_weight_uniformity(wht)["acceptable"]
+
+        # The bad-pixel policy sees the noise map, so mirror the stripe into
+        # noise space: reduced IVM weight -> elevated but finite noise.
+        noise = np.full((121, 121), 1.0)
+        noise[:, 60] = np.sqrt(4.0 / 3.0)
+        _, _, diag = mask_isolated_bad_pixels(
+            np.zeros_like(noise),
+            noise,
+            center_xy=self.CENTER,
+            pixel_scale=self.PIXEL_SCALE,
+        )
+        # No pixel is non-finite or <= 0, so nothing is even a candidate —
+        # not the clustering check, not the 1.5" lens-core protection.
+        assert diag["n_masked_pixels"] == 0
+
+    def test_row_oriented_stripe_is_caught_too(self):
+        # A detector column lands on an image row after drizzling to a sky
+        # frame at the right orientation, so both axes are tested.
+        from autoreduce.drizzle.diagnostics import check_local_weight_deficit
+
+        wht = np.full((121, 121), 100.0)
+        wht[60, :] = 50.0
+        verdict = check_local_weight_deficit(wht, self.CENTER, self.PIXEL_SCALE)
+        assert not verdict["acceptable"]
+        assert verdict["min_line_axis"] == "row"
+        assert verdict["min_line_ratio"] == pytest.approx(0.5)
+
+    def test_zero_coverage_inside_the_region_reads_as_total_loss(self):
+        from autoreduce.drizzle.diagnostics import check_local_weight_deficit
+
+        wht = np.full((121, 121), 100.0)
+        wht[:, 60] = 0.0
+        verdict = check_local_weight_deficit(wht, self.CENTER, self.PIXEL_SCALE)
+        assert verdict["min_line_ratio"] == pytest.approx(0.0)
+        assert not verdict["acceptable"]
+
+    def test_uniformly_degraded_science_region_is_caught(self):
+        # The complementary failure: no stripe, but the whole lens region
+        # sits below the cutout median — min_line_ratio and the region
+        # median agree here.
+        from autoreduce.drizzle.diagnostics import check_local_weight_deficit
+
+        wht = np.full((121, 121), 100.0)
+        # The 1.5" radius is 30 px here, so the region spans 30..90.
+        wht[30:91, 30:91] = 70.0
+        verdict = check_local_weight_deficit(wht, self.CENTER, self.PIXEL_SCALE)
+        assert not verdict["acceptable"]
+        assert verdict["science_median_ratio"] == pytest.approx(0.7)
+
+    def test_empty_and_off_cutout_inputs_raise(self):
+        from autoreduce.drizzle.diagnostics import local_weight_deficit
+
+        with pytest.raises(ValueError, match="coverage"):
+            local_weight_deficit(np.zeros((10, 10)), (5.0, 5.0), self.PIXEL_SCALE)
+        with pytest.raises(ValueError, match="off the cutout"):
+            local_weight_deficit(
+                np.full((10, 10), 1.0), (500.0, 500.0), self.PIXEL_SCALE
+            )
+
+
 def test_provenance_record(tmp_path):
     import json
 

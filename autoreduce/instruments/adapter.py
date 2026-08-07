@@ -56,6 +56,43 @@ class InstrumentAdapter:
     # injected MEAN never depends on it. None where unused (HST e-/s
     # frames are already electron-referred).
     e_per_dn: Optional[float] = None
+    # Which DQ bits AstroDrizzle should treat as GOOD, as a function of
+    # exposure count (issue #65). Rows are
+    # ``(min_exposures, driz_sep_bits, final_bits)`` in ascending order and
+    # carry MDRIZTAB's own semantics: the applicable row is the last one whose
+    # ``min_exposures <= n``. Mirrors STScI's shipped MDRIZTAB reference files
+    # rather than enabling ``mdriztab=True``, which would also import
+    # final_scale/final_pixfrac/final_kernel/final_rot and silently revert the
+    # deliberate lensing deviations in hst_acs_pipeline.md stage 3.
+    #
+    # None = emit no bits keywords at all, leaving the backend's own default
+    # untouched — correct for the non-AstroDrizzle backends (jwst_image3,
+    # nirc2_native), which have no such keyword.
+    dq_bits_rows: Optional[Tuple[Tuple[int, int, int], ...]] = None
+
+    def dq_bits_for(self, n_exposures: int) -> Optional[Tuple[int, int]]:
+        """
+        ``(driz_sep_bits, final_bits)`` for this exposure count, or None when
+        the instrument declares no table.
+
+        The value is genuinely N-dependent: single-exposure data uses 65535
+        (every bit good) because with one exposure there is nothing to fill a
+        masked pixel with, so the standard recipe keeps flagged pixels rather
+        than punching holes. A flat constant would be wrong.
+        """
+        if self.dq_bits_rows is None:
+            return None
+        if n_exposures < 1:
+            raise ValueError(f"need at least one exposure, got {n_exposures}")
+        applicable = [row for row in self.dq_bits_rows if row[0] <= n_exposures]
+        if not applicable:
+            raise ValueError(
+                f"instrument {self.key!r} has no DQ-bits row covering "
+                f"{n_exposures} exposure(s); rows start at "
+                f"{self.dq_bits_rows[0][0]}"
+            )
+        _, driz_sep_bits, final_bits = applicable[-1]
+        return driz_sep_bits, final_bits
 
     def ground_detector(self):
         """The detector constants, loud when a ground stage needs them."""

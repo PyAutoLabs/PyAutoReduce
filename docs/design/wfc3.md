@@ -35,6 +35,57 @@ scale, R = 1.5; comparisons account for whether R is applied.)
 | saturation | ~78 ke- effective full well |
 | psf | same tiers; STScI focus-diverse ePSF grids exist for IR when tier 2 lands |
 
+## DQ bits — the blob bit, and why the IR table has three rows (issue #65)
+
+Until this landed, no bits keyword was emitted anywhere in the pipeline, so
+every reduction inherited drizzlepac's package default `final_bits = "0"`
+(`drizzlepac/pars/astrodrizzle.cfg:101`) — **no** DQ bit treated as good, and
+every flagged pixel rejected. That is far more aggressive than STScI's own
+practice, and on the IR channel it has a specific, structural consequence.
+
+**Blobs (DQ 512).** IR-channel blobs are detector-fixed features — shadows
+cast by particulate contamination on the channel-select mechanism mirror —
+which `calwf3` *flags* but does not remove. They are fixed in detector
+coordinates, so a dither pattern of a few pixels moves them barely at all: the
+same detector pixels are flagged in every exposure of the visit. Reject them
+and the mosaic gets a structured **zero-coverage hole** rather than the
+speckle that a large dither would produce. PJ011646 (program 14653, F160W,
+5 exposures, 2–6 px dithers) failed packaging on exactly this — a single
+123-px hole at r = 5.3″, DQ 512 at the same detector pixels in all five
+exposures — while a trusted external reduction of the same data has none.
+STScI's own MDRIZTAB passes the blob bit, so under standard practice that hole
+could not have occurred.
+
+The adapter now carries STScI's rows, read from the shipped reference file:
+
+| Reference file | `numimages` | `driz_sep_bits` | `final_bits` |
+|---|---|---|---|
+| `wfc3/3562021pi_mdz.fits` | 1 | 65535 | 65535 |
+| " | 2 | 65535 | **528** |
+| " | ≥4 | 528 | 528 |
+
+`528 = 512 + 16` — blob plus hot. Two things about this table are load-bearing:
+
+- **The two columns differ at N = 2–3.** The separate (median-building)
+  drizzle still keeps every bit while the final drizzle is already at 528, so
+  the adapter stores rows of `(min_exposures, driz_sep_bits, final_bits)`
+  rather than one bits value per exposure count. UVIS and ACS/WFC keep the two
+  columns equal at every N, but the IR channel does not, and a single-value
+  design would silently misreport one of them.
+- **Single-exposure data uses 65535 — every bit good.** With one exposure
+  there is nothing to fill a masked pixel with, so the standard recipe keeps
+  flagged pixels rather than punching holes. Any fix here has to be N-aware; a
+  flat constant would be wrong in both directions.
+
+Rows follow MDRIZTAB's own semantics: the applicable row is the last one whose
+`numimages` does not exceed the actual exposure count.
+
+**Not `mdriztab=True`.** Enabling MDRIZTAB wholesale would import the entire
+parameter set — `final_scale`, `final_pixfrac`, `final_kernel`, `final_rot` —
+and silently revert the deliberate, justified lensing deviations in
+`hst_acs_pipeline.md` stage 3 (0.05″/pix, pixfrac 0.8, north-up). The bits
+columns are mirrored onto the adapters instead, and our explicit kwargs stand.
+
 ## Coverage audit vs `ajshajib/hst-lens` (the checklist, not the architecture)
 
 Their three notebooks (Download / IR / UVIS) cover: archive download,

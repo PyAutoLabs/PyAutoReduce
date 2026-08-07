@@ -43,6 +43,18 @@ def drizzle_kwargs_for(spec: TargetSpec, adapter: InstrumentAdapter, n_exposures
         median=multi,
         blot=multi,
     )
+    # Which DQ bits count as good (issue #65). Precedence: TargetSpec
+    # override > adapter's MDRIZTAB-derived table > emit nothing (the
+    # non-AstroDrizzle backends, which have no such keyword). The keys are
+    # deliberately absent rather than 0 when unset — 0 is drizzlepac's own
+    # "no bit is good" default and was the bug.
+    bits = adapter.dq_bits_for(n_exposures)
+    if bits is not None:
+        kwargs.update(driz_sep_bits=bits[0], final_bits=bits[1])
+    if spec.driz_sep_bits is not None:
+        kwargs["driz_sep_bits"] = spec.driz_sep_bits
+    if spec.final_bits is not None:
+        kwargs["final_bits"] = spec.final_bits
     if multi and spec.cr_method == "deepcr":
         # Per-frame route (issue #61): CR masks are already in the DQ arrays
         # (apply_per_frame_cr_masks), so the stack rejection is off and the
@@ -51,6 +63,32 @@ def drizzle_kwargs_for(spec: TargetSpec, adapter: InstrumentAdapter, n_exposures
         # the masks were written into, silently producing an unmasked mosaic.
         kwargs.update(driz_cr=False, median=False, blot=False, resetbits=0)
     return kwargs
+
+
+def dq_bits_provenance(
+    spec: TargetSpec, adapter: InstrumentAdapter, n_exposures: int
+) -> Dict:
+    """
+    Where each bits value came from, so a dataset stays re-derivable after
+    the adapter tables or the user's spec change (issue #65). Pure function.
+    """
+    table = adapter.dq_bits_for(n_exposures)
+    record = {"n_exposures": n_exposures}
+    for i, name in enumerate(("driz_sep_bits", "final_bits")):
+        override = getattr(spec, name)
+        if override is not None:
+            record[name] = override
+            record[f"{name}_source"] = "target_spec"
+        elif table is not None:
+            record[name] = table[i]
+            record[f"{name}_source"] = "adapter_mdriztab"
+        else:
+            record[name] = None
+            record[f"{name}_source"] = "unset"
+    if adapter.dq_bits_rows is not None:
+        applicable = [r for r in adapter.dq_bits_rows if r[0] <= n_exposures]
+        record["adapter_row_min_exposures"] = applicable[-1][0]
+    return record
 
 
 def star_pass_kwargs_for(
@@ -183,7 +221,10 @@ def combine(
     sci = _one("_sci.fits")
     wht = _one("_wht.fits")
 
-    tail = {"cr_method": spec.cr_method}
+    tail = {
+        "cr_method": spec.cr_method,
+        "dq_bits": dq_bits_provenance(spec, adapter, len(exposures)),
+    }
     if per_frame_cr is not None:
         tail["per_frame_cr"] = per_frame_cr
     provenance = combine_provenance(

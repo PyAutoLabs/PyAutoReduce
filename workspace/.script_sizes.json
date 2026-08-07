@@ -8,6 +8,7 @@
   "scripts/guides/output_contract.py": 15552,
   "scripts/guides/target_spec.py": 14916,
   "scripts/hst_acs/__init__.py": 0,
+  "scripts/hst_acs/dials.py": 17822,
   "scripts/hst_acs/individual.py": 19265,
   "scripts/hst_acs/psf.py": 20797,
   "scripts/hst_acs/simulator.py": 16907,

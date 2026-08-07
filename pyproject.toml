@@ -60,7 +60,10 @@ starred = ["starred-astro>=1.6"]
 # (mask-only; pulls torch, hence not a base dependency). >=0.3 for the
 # ACS-WFC / WFC3-UVIS model registry names.
 frames = ["deepCR>=0.3"]
-test = ["pytest"]
+# drizzle: the one sanctioned heavy-ish test dependency — the nirc2_native
+# resampler tests are importorskip-guarded on it, and installing it in CI
+# makes them run rather than skip.
+test = ["pytest", "drizzle>=2.0"]
 dev = ["pytest", "black"]
 
 [tool.pytest.ini_options]

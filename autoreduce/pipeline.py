@@ -22,7 +22,7 @@ from .acquire import mast as mast_mod
 from .acquire import quality as quality_mod
 from .align import diagnostics as align_mod
 from .drizzle import combine as combine_mod
-from .drizzle.diagnostics import check_weight_uniformity
+from .drizzle.diagnostics import check_local_weight_deficit, check_weight_uniformity
 from .instruments import InstrumentAdapter
 from .noise import rms as rms_mod
 from .package import cosmic_rays as cr_mod
@@ -650,6 +650,13 @@ def _package(ctx: _StageContext, sci, header, wht, noise, psf, psf_full) -> None
     )
     ctx.record["drizzle"]["weight_uniformity_cutout"] = check_weight_uniformity(
         wht_cut
+    )
+    # ...and the cutout-wide statistic still averages the lens away: a stripe
+    # of reduced-but-finite coverage through the deflector core moves neither
+    # it nor the bad-pixel policy above (issue #65 leg 2). Recorded, not
+    # raised — the limit is provisional until the leg-1 control test.
+    ctx.record["drizzle"]["local_weight_deficit"] = check_local_weight_deficit(
+        wht_cut, center_xy=center_xy, pixel_scale=spec.final_scale
     )
 
     fits.PrimaryHDU(psf.astype(np.float32)).writeto(

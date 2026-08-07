@@ -292,6 +292,36 @@ PSFs and `reduction.json`. Optionally emit the auxiliary modeling-prep files
 (`info.json` skeleton) but leave scientific annotations (positions, extra
 galaxies) to the modeling workflow — reduction ends at the dataset.
 
+**Coverage guards, and the gap between them (issue #65 leg 2).** Two guards
+run over the packaged cutout, and until leg 2 both answered only the
+*total*-loss question:
+
+- `noise.rms.mask_isolated_bad_pixels` masks isolated dead/rejected pixels and
+  fails loudly on structured clusters, on more than 0.5% of the cutout, or on
+  any bad pixel within `protect_radius_arcsec` (1.5″) of the target — but it
+  tests `~isfinite(noise) | noise <= 0`, so a pixel whose coverage is merely
+  *reduced* is never even a candidate.
+- `drizzle.diagnostics.weight_uniformity` is a global RMS/median over the
+  cutout against a 0.2 limit; the slacs0008 spike measured 0.066, and a
+  handful of degraded columns cannot shift it.
+
+Between them sits the ACS/WFC stripe class: finite, positive, but materially
+reduced IVM weight along a line through the deflector core. It passes both —
+including the 1.5″ protection whose whole purpose is to guarantee the lens
+itself is clean. `drizzle.diagnostics.check_local_weight_deficit` closes that
+gap: inside the same 1.5″ radius it reports the science-region median weight
+and the worst row/column median, each as a fraction of the cutout median, and
+records them in `reduction.json` beside `weight_uniformity_cutout`. Both axes
+are tested because a detector-column defect maps onto an image row or column
+depending on the frame's orientation on the sky.
+
+The limit (0.9) is **provisional and the verdict is recorded, never raised**:
+losing one exposure of N leaves weight (N-1)/N, so 0.9 detects a single lost
+exposure for any N ≤ 9 — the regime where the `sqrt(N/(N-1))` noise inflation
+is visible — but it has not been calibrated against real reductions, and a
+fatal guard at an uncalibrated limit would refuse datasets that are fine. The
+leg-1 control test is what calibrates it.
+
 ## Validation — SLACS parity study
 
 End-to-end on 2–3 SLACS lenses (e.g. `slacs0008-0004` plus one well-behaved

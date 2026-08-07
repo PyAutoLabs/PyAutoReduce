@@ -23,39 +23,5 @@ jobs:
     with:
       package: autoreduce
     secrets: inherit
-
-  # The staged workspace's offline-runnable tutorial scripts double as an
-  # integration smoke of the public API (TargetSpec dials + guard rails, the
-  # Casertano noise mathematics, the drizzle-dial trade study). Everything
-  # network-dependent in workspace/ is excluded — archive access does not
-  # belong in CI. This job moves out with workspace/ when it is extracted to
-  # the autoreduce_workspace repository.
-  workspace_smoke:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-
-      - name: Install autoreduce + plotting deps
-        run: |
-          pip install --upgrade pip setuptools wheel
-          pip install -e . matplotlib scipy
-
-      - name: Run offline workspace scripts
-        run: |
-          set -e
-          cd workspace
-          export MPLCONFIGDIR=/tmp/matplotlib
-          for s in scripts/guides/target_spec.py scripts/guides/noise_maps.py scripts/hst_acs/dials.py; do
-            echo "::group::$s"
-            python "$s"
-            echo "::endgroup::"
-          done
+  # (The offline workspace-smoke job moved to the extracted
+  # autoreduce_workspace repository's own smoke_tests.yml.)

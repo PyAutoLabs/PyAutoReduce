@@ -34,16 +34,17 @@ applies here.
 - FITS files are never committed (`.gitignore` enforces this); `prototypes/`
   writes to `prototypes/output/` and `prototypes/cache/`.
 
-## The embedded workspace (staged for extraction)
+## The workspace
 
-`workspace/` is the complete **autoreduce_workspace** — the user-facing tutorial
-workspace (per-instrument `start_here.py` / `step_by_step.py` / `psf.py` /
-`simulator.py` examples, guides, README, llms.txt) — staged here because the
-`PyAutoLabs/autoreduce_workspace` repository does not exist yet. It is written
-as a self-contained repo root: once the repo is created, extract it with
-`git filter-repo --subdirectory-filter workspace` (or copy the tree) and it
-works unchanged. Its own `AGENTS.md` governs work inside it; do not entangle it
-with library code (scripts consume only the public `autoreduce` API).
+The user-facing tutorial workspace (per-instrument `start_here.py` /
+`step_by_step.py` / `psf.py` / `simulator.py` examples, guides, README,
+llms.txt) lives in its own repository:
+https://github.com/PyAutoLabs/autoreduce_workspace (typically cloned as a
+sibling, `../autoreduce_workspace`). It was staged under `workspace/` in this
+repo until 2026-08-07 and extracted with history via
+`git filter-repo --subdirectory-filter workspace`. Workspace scripts consume
+only the public `autoreduce` API — a public-API change here means the
+workspace examples may need updating; flag it in your PR.
 
 <!-- repos_sync:history:begin -->
 ## Never rewrite history

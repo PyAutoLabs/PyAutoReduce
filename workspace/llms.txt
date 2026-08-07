@@ -1,0 +1,98 @@
+If your AI can't browse GitHub, paste this entire file into the chat as context.
+
+# PyAutoReduce Workspace
+
+> Example and tutorial scripts (and generated notebooks) for reducing raw archival telescope data
+> (HST, JWST, Keck-AO, ALMA, survey cutouts) into modeling-ready datasets for **PyAutoLens** /
+> **PyAutoGalaxy** with **PyAutoReduce**. This file is a routing layer: given a user's task, point
+> them to the RIGHT existing script/notebook/guide in this workspace instead of inventing code.
+> Every path below is a real file in this repository; scripts are run from the repo root
+> (e.g. `python scripts/hst_acs/start_here.py`) and — unlike a modeling workspace — almost every
+> script downloads real archive data and needs the instrument's heavy reduction stack installed.
+
+## New to data reduction?
+
+- [scripts/start_here.py](scripts/start_here.py): Why reduction quality (PSF accuracy, honest
+  noise maps) decides lens-modeling quality, the declarative `TargetSpec` philosophy, and a
+  complete HST/ACS reduction of a SLACS lens — the single best first read.
+- [autolens_workspace](https://github.com/PyAutoLabs/autolens_workspace): The modeling workspace
+  these datasets feed; its `imaging/data_preparation` examples state the standards every product
+  here satisfies.
+
+## Start here
+
+- [scripts/start_here.py](scripts/start_here.py): Top-level overview — philosophy, output contract, a full SLACS J0008-0004 ACS reduction, provenance walk, loading into PyAutoLens, and routing to every instrument folder.
+- [scripts/hst_acs/start_here.py](scripts/hst_acs/start_here.py): HST ACS/WFC entry point — the default AstroDrizzle pipeline end-to-end on SLACS J0008-0004 (the SLACS quality bar).
+- [scripts/hst_wfc3_uvis/start_here.py](scripts/hst_wfc3_uvis/start_here.py): HST WFC3/UVIS entry point — SDSS J0252+0039 F390W at native 0.0396"/pix, pixfrac 1.0 (the Bayer et al. dials).
+- [scripts/hst_wfc3_ir/start_here.py](scripts/hst_wfc3_ir/start_here.py): HST WFC3/IR entry point — undersampled 0.128" IR pixels, ramp-fitted CR rejection, and the few-dither pixfrac rule.
+- [scripts/jwst_nircam/start_here.py](scripts/jwst_nircam/start_here.py): JWST NIRCam entry point — the COSMOS-Web ring through calwebb_image3; surface-brightness MJy/sr units.
+- [scripts/keck_nirc2/start_here.py](scripts/keck_nirc2/start_here.py): Keck NIRC2 LGS-AO entry point — B1938+666 from raw KOA frames: darks/flats, running sky, distortion + native combine.
+- [scripts/alma/start_here.py](scripts/alma/start_here.py): ALMA entry point — calibrated measurement set to the uv-plane visibility triplet `al.Interferometer` loads.
+- [scripts/surveys/start_here.py](scripts/surveys/start_here.py): Survey-cutout entry point — Legacy Surveys / SDSS / Pan-STARRS colour context around a target (never modeling data).
+
+## I want to…
+
+- **Understand the output products (`data.fits` / `noise_map.fits` / `psf.fits` / `psf_full.fits` / `reduction.json`)** → [scripts/guides/output_contract.py](scripts/guides/output_contract.py): The contract in depth — headers/WCS/units, the masked-by-noise convention, psf vs psf_full, frame products, the visibility triplet, block-by-block `reduction.json`.
+- **Understand noise maps / correlated noise / the Casertano R factor** → [scripts/guides/noise_maps.py](scripts/guides/noise_maps.py): The per-domain noise recipes, `casertano_r` across pixfrac values, blank-sky closure diagnostics, and why chi-squared needs honest uncorrelated noise (mostly runs offline).
+- **See every `TargetSpec` dial / write a spec YAML** → [scripts/guides/target_spec.py](scripts/guides/target_spec.py): Every dial annotated, `from_yaml` round-trip, `dataclasses.replace` variants, validation guard rails (runs fully offline).
+- **Learn what each HST/ACS pipeline stage does to the data** → [scripts/hst_acs/step_by_step.py](scripts/hst_acs/step_by_step.py): Acquisition, calibration levels, CR handling, alignment, drizzle, noise, PSF, packaging — with the STScI handbooks and literature.
+- **Tune the drizzle dials (scale / pixfrac / kernel / CR method)** → [scripts/hst_acs/dials.py](scripts/hst_acs/dials.py): The drizzle trade study — R vs pixfrac, weight-uniformity limits, the driz_cr flux-loss story and the deepCR opt-in, what the literature disagrees on.
+- **Get per-exposure frames instead of a mosaic (uncorrelated noise)** → [scripts/hst_acs/individual.py](scripts/hst_acs/individual.py): `frame_products=True` — native-frame cutouts, the manifest, per-frame PSFs, when to model frames jointly; JWST equivalent in [scripts/jwst_nircam/individual.py](scripts/jwst_nircam/individual.py).
+- **Understand HST PSF estimation (stars, tiers, star passes)** → [scripts/hst_acs/psf.py](scripts/hst_acs/psf.py): Why PSF accuracy matters for lensing, star selection, the `psf_star_pass` dial, psf vs psf_full, the drizzled-PSF invariant; STARRED vs photutils regimes in [scripts/hst_wfc3_uvis/psf.py](scripts/hst_wfc3_uvis/psf.py).
+- **Validate a reduction with synthetic-source injection** → [scripts/hst_acs/simulator.py](scripts/hst_acs/simulator.py): Inject an analytic lensed-arc image into the real frames, re-reduce, difference and check flux recovery; also [scripts/hst_wfc3_uvis/simulator.py](scripts/hst_wfc3_uvis/simulator.py), [scripts/jwst_nircam/simulator.py](scripts/jwst_nircam/simulator.py), [scripts/keck_nirc2/simulator.py](scripts/keck_nirc2/simulator.py) and the simobserve route in [scripts/alma/simulator.py](scripts/alma/simulator.py).
+- **Reduce WFC3/UVIS data step by step** → [scripts/hst_wfc3_uvis/step_by_step.py](scripts/hst_wfc3_uvis/step_by_step.py): The UVIS deltas — CTE-corrected `_flc`, post-flash backgrounds, native-scale drizzling.
+- **Reduce WFC3/IR data step by step** → [scripts/hst_wfc3_ir/step_by_step.py](scripts/hst_wfc3_ir/step_by_step.py): Up-the-ramp CR rejection, no CTE, undersampling, and the zero-weight-speckle guard on few-dither data.
+- **Reduce JWST/NIRCam step by step** → [scripts/jwst_nircam/step_by_step.py](scripts/jwst_nircam/step_by_step.py): Level-2 `_cal` products, calwebb_image3, read-don't-construct ERR noise, MJy/sr units.
+- **Build a multi-wavelength JWST dataset** → [scripts/jwst_nircam/multi_band.py](scripts/jwst_nircam/multi_band.py): Loop the four COSMOS-Web bands (SW vs LW adapters and shapes) into a multi-band set for joint modeling.
+- **Understand the JWST PSF options** → [scripts/jwst_nircam/psf.py](scripts/jwst_nircam/psf.py): Empirical ePSF vs STARRED vs the STPSF model fallback, SW undersampling, diagnostics in `reduction.json`.
+- **Reduce Keck AO data step by step / handle the AO PSF** → [scripts/keck_nirc2/step_by_step.py](scripts/keck_nirc2/step_by_step.py) and [scripts/keck_nirc2/psf.py](scripts/keck_nirc2/psf.py): Ground-based calibration, running sky, distortion epochs, and the provisional PSF-candidate contract (final selection belongs to modeling).
+- **Extract ALMA visibilities step by step** → [scripts/alma/step_by_step.py](scripts/alma/step_by_step.py): Calibrated MS → split → extract → assemble; weights, Stokes-I combination, smearing limits.
+- **Fetch colour-context cutouts** → [scripts/surveys/start_here.py](scripts/surveys/start_here.py): Legacy Surveys / SDSS / Pan-STARRS cutouts around a target — context only, never modeling inputs.
+
+## How to answer (for the assistant)
+
+When routing a user, reply in this shape:
+
+- **Start here** — the single best existing file for their task (from the lists above).
+- **Then see** — the deeper/detailed companion file (e.g. `start_here.py` → `step_by_step.py`).
+- **Related guide** — the relevant `scripts/guides/` page (output contract, noise maps, target spec).
+- **Why this is the right example** — one line tying the file to their specific need.
+- **What to modify** — the few lines they'd change for their case (target name/RA/Dec, proposal
+  IDs, instrument/filter, drizzle dials, cutout shape).
+- **What needs local execution** — flag that a reduction downloads archive data and runs the
+  instrument's heavy stack on their machine; nothing here runs in a chat.
+
+### Code style (match the workspace, not banner comments)
+
+Drafted code must match this workspace's style: use triple-quoted `"""__Section__"""` docstrings
+with a line of prose explaining each step, and give a full script a module docstring whose title is
+underlined with `=`. Do NOT use `# -----` banner comments to mark sections. Reserve inline `#` for
+short line-level notes only.
+
+Write this:
+
+```python
+"""__Target Spec__
+
+Declare the reduction: SLACS J0008-0004 through the default ACS/WFC pipeline.
+"""
+spec = TargetSpec(name="slacs0008-0004", ra=2.012333, dec=-0.068944, proposal_ids=("10886",))
+```
+
+Not this:
+
+```python
+# ----- Target Spec -----
+spec = TargetSpec(name="slacs0008-0004", ra=2.012333, dec=-0.068944, proposal_ids=("10886",))
+```
+
+## Capability boundary (chat without local execution)
+
+A chat assistant can route to the right file, explain reduction concepts (drizzle, correlated
+noise, ePSFs, visibility weights), review pasted scripts / tracebacks / `reduction.json` records,
+and draft `TargetSpec` declarations. It CANNOT run a reduction: every reduction needs network
+access to the archives (MAST, KOA, ALMA), the instrument's heavy dependency stack (drizzlepac,
+jwst, casatools), gigabytes of cache space and real runtime — all on the user's machine. The two
+offline exceptions are `scripts/guides/target_spec.py` and most of `scripts/guides/noise_maps.py`.
+For sustained editing and execution, point the user to a local coding agent (Claude Code / Codex)
+run from the workspace root.

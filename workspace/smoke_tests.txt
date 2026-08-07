@@ -1,0 +1,62 @@
+# Curated smoke-test list for the autoreduce_workspace.
+#
+# Every script in this workspace performs a real reduction: it downloads
+# exposures from an archive (MAST, KOA, the ALMA archive) and runs the
+# instrument's heavy reduction stack (drizzlepac, jwst, casatools). CI smoke
+# runners have neither network access to the archives nor the heavy stacks
+# installed, so NO script currently runs in smoke tests — every entry below is
+# commented out, with the blocking dependency cited per entry. The two offline
+# guides (guides/target_spec.py, most of guides/noise_maps.py) are the first
+# candidates to enable once an autoreduce install lands in the smoke image.
+#
+# Keep this list a curated, commented coverage argument: when enabling an
+# entry, say why it is now runnable; when adding a script, list it here
+# commented with its reason.
+
+# --- Top level -------------------------------------------------------------
+# scripts/start_here.py                    # requires MAST network + drizzlepac (full ACS reduction)
+
+# --- Guides ----------------------------------------------------------------
+# scripts/guides/output_contract.py        # offline, but reads output/ produced by scripts/start_here.py (clean-exits without it); needs autoreduce installed
+# scripts/guides/noise_maps.py             # offline (pure numpy/astropy demos); needs autoreduce installed — enable first
+# scripts/guides/target_spec.py            # offline (spec construction only); needs autoreduce installed — enable first
+
+# --- HST ACS/WFC -----------------------------------------------------------
+# scripts/hst_acs/start_here.py            # requires MAST network + CRDS sync + drizzlepac
+# scripts/hst_acs/step_by_step.py          # requires MAST network + CRDS sync + drizzlepac
+# scripts/hst_acs/individual.py            # requires MAST network + drizzlepac + deepCR ([frames] extra)
+# scripts/hst_acs/psf.py                   # requires MAST network + drizzlepac + photutils star field
+# scripts/hst_acs/simulator.py             # requires MAST network + drizzlepac (injection re-runs the pipeline)
+# scripts/hst_acs/dials.py                 # requires MAST network + drizzlepac (multiple drizzle passes)
+
+# --- HST WFC3/UVIS ---------------------------------------------------------
+# scripts/hst_wfc3_uvis/start_here.py      # requires MAST network + CRDS sync + drizzlepac
+# scripts/hst_wfc3_uvis/step_by_step.py    # requires MAST network + CRDS sync + drizzlepac
+# scripts/hst_wfc3_uvis/psf.py             # requires MAST network + drizzlepac (+ [starred] extra for the STARRED leg)
+# scripts/hst_wfc3_uvis/simulator.py       # requires MAST network + drizzlepac (injection re-runs the pipeline)
+
+# --- HST WFC3/IR -----------------------------------------------------------
+# scripts/hst_wfc3_ir/start_here.py        # requires MAST network + CRDS sync + drizzlepac
+# scripts/hst_wfc3_ir/step_by_step.py      # requires MAST network + CRDS sync + drizzlepac
+
+# --- JWST NIRCam -----------------------------------------------------------
+# scripts/jwst_nircam/start_here.py        # requires MAST network + jwst==1.14.0 + CRDS_PATH
+# scripts/jwst_nircam/step_by_step.py      # requires MAST network + jwst==1.14.0 + CRDS_PATH
+# scripts/jwst_nircam/multi_band.py        # requires MAST network + jwst==1.14.0 (four-band loop, hours)
+# scripts/jwst_nircam/psf.py               # requires MAST network + jwst==1.14.0 (+ stpsf for the model leg)
+# scripts/jwst_nircam/individual.py        # requires MAST network + jwst==1.14.0
+# scripts/jwst_nircam/simulator.py         # requires MAST network + jwst==1.14.0 (injection re-runs image3)
+
+# --- Keck NIRC2 ------------------------------------------------------------
+# scripts/keck_nirc2/start_here.py         # requires KOA network + pykoa + drizzle ([keck] extra)
+# scripts/keck_nirc2/step_by_step.py       # requires KOA network + pykoa + drizzle ([keck] extra)
+# scripts/keck_nirc2/psf.py                # requires KOA network + pykoa (PSF-star epoch frames)
+# scripts/keck_nirc2/simulator.py          # requires KOA network + pykoa (injection into prepared frames)
+
+# --- ALMA ------------------------------------------------------------------
+# scripts/alma/start_here.py               # requires ALMA archive network + casatools/casatasks
+# scripts/alma/step_by_step.py             # requires ALMA archive network + casatools/casatasks
+# scripts/alma/simulator.py                # requires casatools/casatasks (simobserve route)
+
+# --- Surveys ---------------------------------------------------------------
+# scripts/surveys/start_here.py            # requires network to the Legacy Surveys / SDSS / Pan-STARRS cutout services

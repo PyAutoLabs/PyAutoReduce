@@ -48,7 +48,7 @@ def model_frame_psf(
         import stpsf
     except ImportError as err:
         raise ImportError(
-            "tier-2b model PSFs need stpsf — pip install autoreduce[psf] "
+            "tier-2b model PSFs need stpsf — pip install pyautoreduce[psf] "
             "(or pip install stpsf, plus its reference data)"
         ) from err
     import poppy

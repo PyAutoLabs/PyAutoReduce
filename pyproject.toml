@@ -3,7 +3,13 @@ requires = ["setuptools>=79.0", "setuptools-scm", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "autoreduce"
+# The distribution name is `pyautoreduce`, NOT `autoreduce`: `autoreduce` on
+# PyPI belongs to an unrelated, actively maintained project
+# (github.com/ayush9pandey/AutoReduce — automated model reduction of nonlinear
+# dynamical systems, 0.1.0 in 2020 through 0.9 in 2026). We cannot publish
+# under it, and until 2026-08-24 our own README told users to install it.
+# The IMPORT package stays `autoreduce` — see PyAutoReduce#71.
+name = "pyautoreduce"
 dynamic = ["version"]
 description = "Data reduction of HST (and future JWST/other) imaging into modeling-ready datasets for PyAutoLens and PyAutoGalaxy"
 readme = { file = "README.md", content-type = "text/markdown" }

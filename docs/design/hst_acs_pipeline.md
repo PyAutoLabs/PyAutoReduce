@@ -476,7 +476,7 @@ Design decisions:
   model + threshold, so datasets remain re-maskable). WFC3/IR skips deepCR
   — calwf3 up-the-ramp fitting already flags IR CRs in DQ.
   Mask-only by contract: deepCR inpainting is never used — bad pixels are
-  masked, never fabricated. Optional dependency: `autoreduce[frames]`.
+  masked, never fabricated. Optional dependency: `pyautoreduce[frames]`.
 - **Masking policy** — any nonzero DQ bit, deepCR CR pixel, off-chip or
   non-finite/non-positive-ERR pixel is masked-by-noise
   (`noise = MASKED_NOISE_VALUE`, `data = 0`), so each frame's

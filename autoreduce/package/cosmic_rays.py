@@ -50,7 +50,7 @@ def masker_for(adapter_key: str) -> Callable[[np.ndarray], np.ndarray]:
     except ImportError as err:
         raise ImportError(
             "frame_products needs deepCR for per-frame cosmic-ray masks — "
-            "pip install autoreduce[frames] (or pip install deepCR)"
+            "pip install pyautoreduce[frames] (or pip install deepCR)"
         ) from err
     model = deepCR(mask=DEEPCR_MODELS[adapter_key], device="CPU")
 

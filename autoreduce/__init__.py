@@ -13,7 +13,11 @@ pipeline design and ``docs/design/roadmap.md`` for what comes after.
 from importlib.metadata import version as _version, PackageNotFoundError
 
 try:
-    __version__ = _version("autoreduce")
+    # The distribution is `pyautoreduce`; the import package is `autoreduce`
+    # (PyAutoReduce#71). Looking up "autoreduce" here would resolve to the
+    # unrelated PyPI project of that name when it happens to be installed, and
+    # fall back to "0.0.dev0" when it is not.
+    __version__ = _version("pyautoreduce")
 except PackageNotFoundError:
     __version__ = "0.0.dev0"
 

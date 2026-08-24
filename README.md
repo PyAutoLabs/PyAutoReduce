@@ -38,7 +38,7 @@ longer-term roadmap (WFC3, JWST, per-exposure frame products) in
 ## Installation
 
 ```bash
-pip install autoreduce            # core (outputs + packaging only)
-pip install "autoreduce[hst]"     # + the STScI HST reduction stack (drizzlepac)
-pip install "autoreduce[psf]"     # + high-fidelity PSF reconstruction back-ends
+pip install pyautoreduce            # core (outputs + packaging only)
+pip install "pyautoreduce[hst]"     # + the STScI HST reduction stack (drizzlepac)
+pip install "pyautoreduce[psf]"     # + high-fidelity PSF reconstruction back-ends
 ```

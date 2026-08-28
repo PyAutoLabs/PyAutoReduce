@@ -34,11 +34,11 @@ WFC3_IR = register(
         # blob bit plus hot pixels. Blobs are detector-fixed IR channel
         # features that calwf3 flags but does not remove; rejecting them on
         # snapshot data with tiny dithers punches structured zero-coverage
-        # holes in the mosaic (PJ011646, 5 exposures, a 123-px hole at
-        # r = 5.3"). The IR rows are the reason this is a table and not a
-        # pair: the two bits columns DIFFER at N = 2-3, where the separate
-        # (median-building) drizzle still keeps every bit while the final
-        # drizzle already drops to 528.
+        # holes in the mosaic (program 14653, F160W, 5 exposures, a
+        # 123-px hole at r = 5.3"). The IR rows are the reason this is a
+        # table and not a pair: the two bits columns DIFFER at N = 2-3,
+        # where the separate (median-building) drizzle still keeps every
+        # bit while the final drizzle already drops to 528.
         dq_bits_rows=((1, 65535, 65535), (2, 65535, 528), (4, 528, 528)),
     )
 )

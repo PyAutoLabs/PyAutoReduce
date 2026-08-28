@@ -154,10 +154,11 @@ class TestDqBitsDial:
         assert self._bits("wfc3_ir", 4) == (528, 528)
         assert 528 == 512 | 16
 
-    def test_pj011646_would_not_have_holed(self):
-        # The regression this leg exists for: PJ011646 was F160W with five
-        # exposures, so it lands on the numimages >= 4 row, where STScI
-        # passes exactly the blob bit (512) that punched the 123-px hole.
+    def test_five_exposure_f160w_mosaic_would_not_have_holed(self):
+        # The regression this leg exists for: an HST program 14653 F160W
+        # mosaic with five exposures lands on the numimages >= 4 row, where
+        # STScI passes exactly the blob bit (512) that punched the 123-px
+        # hole.
         _, final_bits = self._bits("wfc3_ir", 5)
         assert final_bits & 512
 

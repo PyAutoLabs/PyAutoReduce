@@ -49,10 +49,11 @@ which `calwf3` *flags* but does not remove. They are fixed in detector
 coordinates, so a dither pattern of a few pixels moves them barely at all: the
 same detector pixels are flagged in every exposure of the visit. Reject them
 and the mosaic gets a structured **zero-coverage hole** rather than the
-speckle that a large dither would produce. PJ011646 (program 14653, F160W,
-5 exposures, 2–6 px dithers) failed packaging on exactly this — a single
-123-px hole at r = 5.3″, DQ 512 at the same detector pixels in all five
-exposures — while a trusted external reduction of the same data has none.
+speckle that a large dither would produce. An HST program 14653 dataset
+(F160W, 5 exposures, 2–6 px dithers) failed packaging on exactly this — a
+single 123-px hole at r = 5.3″, DQ 512 at the same detector pixels in all
+five exposures — while a trusted external reduction of the same data has
+none.
 STScI's own MDRIZTAB passes the blob bit, so under standard practice that hole
 could not have occurred.
 

@@ -31,11 +31,21 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 # Reduced outputs are gitignored and live only in the canonical checkout, not
-# in the task worktree — resolve the field there, worktree-first.
+# in a task worktree — resolve the field there too, worktree-first. A worktree's
+# `.git` is a FILE pointing back into `<canonical>/.git/worktrees/<name>`, so
+# the canonical checkout is derived from git rather than from a workspace path,
+# which differs per machine and moves when the workspace is regrouped. In an
+# ordinary clone `.git` is a directory and this collapses to ROOT.
+_DOTGIT = ROOT / ".git"
+MAIN = (
+    Path(_DOTGIT.read_text().split(":", 1)[-1].strip()).parent.parent.parent
+    if _DOTGIT.is_file()
+    else ROOT
+)
 _FIELD_NAME = "cosmos_web_ring_f115w"  # richest clean-point-source count of the reduced fields
 _CANDIDATES = [
     ROOT / "scripts" / "output" / _FIELD_NAME,
-    Path.home() / "Code/PyAutoLabs/PyAutoReduce/scripts/output" / _FIELD_NAME,
+    MAIN / "scripts" / "output" / _FIELD_NAME,
 ]
 FIELD = next((p for p in _CANDIDATES if (p / "data.fits").exists()), _CANDIDATES[0])
 OUT = ROOT / "prototypes" / "output" / "starred_spike"

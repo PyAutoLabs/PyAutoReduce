@@ -20,10 +20,22 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
+# Reduced outputs are gitignored and live only in the canonical checkout, not
+# in a task worktree — resolve the field there too, worktree-first. A worktree's
+# `.git` is a FILE pointing back into `<canonical>/.git/worktrees/<name>`, so
+# the canonical checkout is derived from git rather than from a workspace path,
+# which differs per machine and moves when the workspace is regrouped. In an
+# ordinary clone `.git` is a directory and this collapses to ROOT.
+_DOTGIT = ROOT / ".git"
+MAIN = (
+    Path(_DOTGIT.read_text().split(":", 1)[-1].strip()).parent.parent.parent
+    if _DOTGIT.is_file()
+    else ROOT
+)
 _FIELD = "omegacen_f606w"
 _CAND = [
     ROOT / "scripts/output" / _FIELD,
-    Path.home() / "Code/PyAutoLabs/PyAutoReduce/scripts/output" / _FIELD,
+    MAIN / "scripts/output" / _FIELD,
 ]
 FIELD = next((p for p in _CAND if (p / "data.fits").exists()), _CAND[0])
 OUT = ROOT / "prototypes" / "output" / "starred_vs_epsf_omegacen"

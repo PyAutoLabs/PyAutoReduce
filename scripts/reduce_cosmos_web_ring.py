@@ -18,6 +18,7 @@ STARRED is GPL/JAX and shipped as an extra — install ``pyautoreduce[starred]``
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -30,12 +31,43 @@ from autoreduce.instruments import nircam_adapter_for_filter  # noqa: E402
 RA, DEC = 150.10048, 1.89301
 CACHE_ROOT = REPO / "scripts" / "cache"
 OUTPUT_ROOT = REPO / "scripts" / "output"
-DEMO_ROOT = Path(
-    "/home/jammy/Code/PyAutoLabs/autolens_assistant/dataset/imaging/"
-    "cosmos_web_ring/wavebands"
-)
+
+# The parity reference is a *sibling checkout*, not part of this repo and not
+# shipped in the `pyautoreduce` distribution: autolens_assistant's demo
+# cutouts. Resolve it, never name it — an absolute path is right on exactly one
+# machine, and the checkouts beside us get grouped into family subdirectories
+# (autolens_assistant -> lens/autolens_assistant) as the workspace grows.
+DEMO_REL = Path("autolens_assistant/dataset/imaging/cosmos_web_ring/wavebands")
 
 BANDS = ("F115W", "F150W", "F277W", "F444W")
+
+
+def default_demo_root() -> Path:
+    """Where autolens_assistant's parity cutouts are, resolved beside us.
+
+    ``$AUTOREDUCE_DEMO_ROOT`` wins if set; otherwise look for the sibling
+    checkout one and two levels above this repo, at each level directly and one
+    family subdirectory deeper. That covers the flat workspace, the regrouped
+    one, and a bundle of task worktrees, without this library knowing anything
+    about the workspace tooling — `pyautoreduce` is released to users who have
+    no workspace at all, so it must not import the developer-box organs that
+    could answer this question.
+
+    Only ever probes for directories, so it cannot raise: a missing demo
+    dataset stays an error for `compare` at run time, never an import failure,
+    and the guess returned when nothing is found names a plausible path.
+    """
+    env = os.environ.get("AUTOREDUCE_DEMO_ROOT")
+    if env:
+        return Path(env).expanduser()
+    for root in (REPO.parent, REPO.parent.parent):
+        for cand in (root / DEMO_REL, *sorted(root.glob(f"*/{DEMO_REL}"))):
+            if cand.is_dir():
+                return cand
+    return REPO.parent / DEMO_REL
+
+
+DEMO_ROOT = default_demo_root()
 
 
 def spec_for(band: str, psf_backend: str = "epsf") -> TargetSpec:
@@ -60,14 +92,14 @@ def spec_for(band: str, psf_backend: str = "epsf") -> TargetSpec:
     )
 
 
-def compare(band: str, out_dir: Path) -> dict:
+def compare(band: str, out_dir: Path, demo_root: Path | None = None) -> dict:
     from astropy.io import fits
 
     from autoreduce.validation import registered_ratios
 
     new_data = fits.getdata(out_dir / "data.fits").astype(float)
     new_noise = fits.getdata(out_dir / "noise_map.fits").astype(float)
-    demo_dir = DEMO_ROOT / band
+    demo_dir = (demo_root or DEMO_ROOT) / band
     demo_data = fits.getdata(demo_dir / "data.fits").astype(float)
     demo_noise = fits.getdata(demo_dir / "noise_map.fits").astype(float)
     return {
@@ -84,6 +116,12 @@ def main():
         help="PSF back-end: photutils Tier-1 (default) or STARRED Tier-1b (#35; "
         "needs the pyautoreduce[starred] extra)",
     )
+    parser.add_argument(
+        "--demo-root", type=Path, default=None,
+        help="autolens_assistant parity cutouts (default: the sibling checkout "
+        f"resolved beside this repo, currently {DEMO_ROOT}; or "
+        "$AUTOREDUCE_DEMO_ROOT)",
+    )
     args = parser.parse_args()
     bands = BANDS if args.band == "all" else (args.band,)
 
@@ -98,7 +136,7 @@ def main():
             "correlated_noise_factor": record["noise"]["correlated_noise_factor"],
             "sky_over_err_floor": record["noise"].get("sky_over_err_floor"),
             "psf": record["psf"],
-            "parity": compare(band, out_dir),
+            "parity": compare(band, out_dir, args.demo_root),
         }
         print(f"[{band}] ---- validation ----")
         print(json.dumps(summary, indent=2))

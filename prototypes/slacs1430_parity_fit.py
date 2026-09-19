@@ -135,6 +135,10 @@ def main(key: str):
         redshift=Z_LENS,
         bulge=lens_bulge,
         mass=lens_mass,
+    )
+    field = af.Model(
+        al.MassField,
+        redshift=Z_LENS,
         shear=af.Model(al.mp.ExternalShear),
     )
 
@@ -153,7 +157,9 @@ def main(key: str):
     source_bulge = af.Model(al.lp_basis.Basis, profile_list=src_gaussians)
 
     source = af.Model(al.Galaxy, redshift=Z_SOURCE, bulge=source_bulge)
-    model = af.Collection(galaxies=af.Collection(lens=lens, source=source))
+    model = af.Collection(
+        galaxies=af.Collection(lens=lens, source=source), fields=field
+    )
 
     positions_yx = json.loads((LEGACY_DIR / "positions.json").read_text())
     if key != "legacy":
@@ -199,8 +205,8 @@ def main(key: str):
     ell = np.hypot(e1, e2)
     q = (1 - ell) / (1 + ell)
     pa = float(np.degrees(np.arctan2(e2, e1)) / 2.0) % 180.0
-    g1 = float(mp.galaxies.lens.shear.gamma_1)
-    g2 = float(mp.galaxies.lens.shear.gamma_2)
+    g1 = float(mp.fields.shear.gamma_1)
+    g2 = float(mp.fields.shear.gamma_2)
 
     summary = {
         "dataset": key,

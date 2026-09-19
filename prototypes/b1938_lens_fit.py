@@ -124,12 +124,18 @@ def main():
         redshift=Z_LENS,
         bulge=af.Model(al.lp.Sersic),
         mass=lens_mass,
+    )
+    field = af.Model(
+        al.MassField,
+        redshift=Z_LENS,
         shear=af.Model(al.mp.ExternalShear),
     )
     source = af.Model(
         al.Galaxy, redshift=Z_SOURCE, bulge=af.Model(al.lp.SersicCore)
     )
-    model = af.Collection(galaxies=af.Collection(lens=lens, source=source))
+    model = af.Collection(
+        galaxies=af.Collection(lens=lens, source=source), fields=field
+    )
 
     search = af.Nautilus(
         path_prefix="b1938_keck_acceptance",

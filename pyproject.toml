@@ -43,6 +43,7 @@ Homepage = "https://github.com/PyAutoLabs/PyAutoReduce"
 include-package-data = true
 
 [tool.setuptools.packages.find]
+include = ["autoreduce*"]
 exclude = ["docs", "prototypes", "test_autoreduce", "test_autoreduce*"]
 
 [tool.setuptools_scm]

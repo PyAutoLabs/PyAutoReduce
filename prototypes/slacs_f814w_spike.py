@@ -54,7 +54,7 @@ TARGET = {
     "ra": 2.012333,
     "dec": -0.068944,
 }
-LEGACY_DIR = Path("/mnt/c/Users/Jammy/Science/subhalo/dataset/slacs") / TARGET["name"]
+LEGACY_DIR = Path("/mnt/c/Users/Jammy/Workspace/Science/dataset/slacs") / TARGET["name"]
 
 FINAL_SCALE = 0.05  # arcsec / pix, SLACS convention
 CUTOUT_SHAPE = (281, 281)

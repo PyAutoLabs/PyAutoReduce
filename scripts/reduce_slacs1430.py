@@ -21,7 +21,7 @@ sys.path.insert(0, str(REPO))
 
 from autoreduce import TargetSpec, reduce_target  # noqa: E402
 
-LEGACY_DIR = Path("/mnt/c/Users/Jammy/Science/subhalo/dataset/slacs/slacs1430+4105")
+LEGACY_DIR = Path("/mnt/c/Users/Jammy/Workspace/Science/dataset/slacs/slacs1430+4105")
 CACHE_ROOT = REPO / "scripts" / "cache"
 OUTPUT_ROOT = REPO / "scripts" / "output"
 

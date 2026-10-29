@@ -24,7 +24,7 @@ import numpy as np
 REPO = Path(__file__).resolve().parent.parent
 
 DATASET_DIRS = {
-    "legacy": Path("/mnt/c/Users/Jammy/Science/subhalo/dataset/slacs/slacs1430+4105"),
+    "legacy": Path("/mnt/c/Users/Jammy/Workspace/Science/dataset/slacs/slacs1430+4105"),
     "autoreduce": REPO / "scripts" / "output" / "slacs1430+4105",
 }
 LEGACY_DIR = DATASET_DIRS["legacy"]

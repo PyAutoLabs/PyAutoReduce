@@ -372,7 +372,7 @@ End-to-end on 2–3 SLACS lenses (e.g. `slacs0008-0004` plus one well-behaved
 and one awkward system):
 
 1. Reduce from MAST with this pipeline.
-2. Compare against `/mnt/c/Users/Jammy/Science/subhalo/dataset/slacs/<lens>/`:
+2. Compare against `/mnt/c/Users/Jammy/Workspace/Science/dataset/slacs/<lens>/`:
    data ratio map (photometric parity + units answer), noise ratio map
    (weight semantics + correlated-noise answer), PSF FWHM/ellipticity
    comparison.

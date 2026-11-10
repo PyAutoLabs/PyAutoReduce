@@ -1,44 +1,51 @@
-# PyAutoReduce
+# PyAutoReduce: Telescope Data for Galaxy and Lens Modeling
 
-Data reduction of Hubble Space Telescope (and, in future, JWST and other
-instrument) imaging into **modeling-ready datasets** for
-[PyAutoLens](https://github.com/PyAutoLabs/PyAutoLens) and
-[PyAutoGalaxy](https://github.com/PyAutoLabs/PyAutoGalaxy).
+**PyAutoReduce** prepares archival telescope observations for modeling with **PyAutoLens** and **PyAutoGalaxy**. Define your target and reduction settings, then produce the data, noise estimates and point spread functions needed for your analysis.
 
-Given a strong lens (or galaxy) target, PyAutoReduce downloads the archival
-exposures, reduces them with the instrument's standard pipeline tooling, and
-emits the exact products the modeling stack loads via `al.Imaging.from_fits`:
+## Getting Started
 
-| Product | Description |
-|---------|-------------|
-| `data.fits` | Science cutout, drizzled to the modeling pixel scale |
-| `noise_map.fits` | Per-pixel RMS: drizzle weight-map background term + Poisson source term, correlated-noise corrected |
-| `psf.fits` / `psf_full.fits` | Drizzle-consistent PSF estimate (compact + extended) |
-| `reduction.json` | Full provenance: program IDs, exposures, zero-point, exposure time, pixel scale, pipeline versions |
-
-## Design principles
-
-- **Default pipelines first.** Each stage uses the instrument's standard
-  tooling (`astroquery.mast`, `drizzlepac`, `photutils`) with its recommended
-  settings; deviations exist only where lens modeling requires them, and each
-  one is documented in the design docs.
-- **Disk-frugal.** Full-frame exposures are transient: download per target,
-  reduce, package the cutouts, evict. Survey-mosaic targets use MAST cutout
-  services instead of tile downloads.
-- **Standalone.** PyAutoReduce emits the PyAutoLens/PyAutoGalaxy input format
-  but does not import them; it sits directly on the astropy ecosystem.
-
-## Status
-
-**Design phase.** The HST/ACS pipeline design lives in
-[`docs/design/hst_acs_pipeline.md`](docs/design/hst_acs_pipeline.md); the
-longer-term roadmap (WFC3, JWST, per-exposure frame products) in
-[`docs/design/roadmap.md`](docs/design/roadmap.md).
-
-## Installation
+Install the core package:
 
 ```bash
-pip install pyautoreduce            # core (outputs + packaging only)
-pip install "pyautoreduce[hst]"     # + the STScI HST reduction stack (drizzlepac)
-pip install "pyautoreduce[psf]"     # + high-fidelity PSF reconstruction back-ends
+pip install pyautoreduce
 ```
+
+For Hubble imaging reductions, install the HST tools:
+
+```bash
+pip install "pyautoreduce[hst]"
+```
+
+- **[Start with an example](https://github.com/PyAutoLabs/autoreduce_workspace/blob/main/scripts/start_here.py)** — follow an HST imaging reduction from archival exposures to a dataset ready for modeling.
+- **[Find your instrument](https://github.com/PyAutoLabs/autoreduce_workspace#find-your-examples)** — explore the workspace examples for HST, JWST, Keck and ALMA.
+- **[Understand the settings](https://github.com/PyAutoLabs/autoreduce_workspace/blob/main/scripts/guides/target_spec.py)** — learn how to describe your target and configure a reduction.
+
+Each instrument needs its own reduction software. Running the examples also requires network access and space for downloaded exposures; you can read them without running them.
+
+## What You Get
+
+For imaging reductions, the main outputs are:
+
+| File | What it contains |
+|---|---|
+| `data.fits` | The reduced science image |
+| `noise_map.fits` | An estimate of the uncertainty in each pixel |
+| `psf.fits` / `psf_full.fits` | Point spread functions describing the image’s blurring |
+| `reduction.json` | Processing settings, diagnostics and provenance |
+
+The [output guide](https://github.com/PyAutoLabs/autoreduce_workspace/blob/main/scripts/guides/output_contract.py) explains these files and the different outputs for individual exposures and interferometer data.
+
+PyAutoReduce runs independently of PyAutoLens and PyAutoGalaxy; its outputs are prepared for use with those libraries.
+
+## Explore Further
+
+- **[Noise maps](https://github.com/PyAutoLabs/autoreduce_workspace/blob/main/scripts/guides/noise_maps.py)** — understand how reduction affects your uncertainty estimates.
+- **[Reduction design](https://github.com/PyAutoLabs/PyAutoReduce/tree/main/docs/design)** — explore the methods and choices behind each instrument’s processing.
+
+## Community and Contributing
+
+Ask questions, suggest improvements and share your work in [PyAutoLabs Discussions](https://github.com/orgs/PyAutoLabs/discussions), or chat with us on [Slack](https://join.slack.com/t/pyautolens/shared_invite/zt-2cufp4eyf-fXfgMxRGuvg~bMrI3uOAxg).
+
+## License
+
+See the [license](https://github.com/PyAutoLabs/PyAutoReduce/blob/main/LICENSE).

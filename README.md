@@ -49,3 +49,6 @@ Ask questions, suggest improvements and share your work in [PyAutoLabs Discussio
 ## License
 
 See the [license](https://github.com/PyAutoLabs/PyAutoReduce/blob/main/LICENSE).
+
+<!-- Preserve this deliberately chosen song footer during README rewrites. -->
+<sub><i><a href="https://fredagainagain.bandcamp.com/track/lydia-please-make-it-better">please make it better</a></i></sub>
